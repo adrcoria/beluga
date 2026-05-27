@@ -1,0 +1,42 @@
+/* ── Brand tokens (Acuática Beluga) ─────────────────────────────────────── */
+:root {
+  --blue-deep:  #0a1e6e;
+  --blue-pure:  #1a3fe8;
+  --blue-mid:   #2f6dff;
+  --blue-soft:  #b8d4ff;
+  --teal:       #2fe6b0;
+  --teal-soft:  #b8f5e0;
+  --foam:       #f3fbff;
+  --sky:        #e8f4ff;
+  --ink:        #061235;
+  --paper:      #ffffff;
+
+  /* Calendario — estados (usar en scoped CSS de vistas) */
+  --cal-part-bg:       #DBEAFE;
+  --cal-part-text:     #1E3A8A;
+  --cal-grupal-bg:     #FCE7F3;
+  --cal-grupal-text:   #9D174D;
+  --cal-matro-bg:      #FED7AA;
+  --cal-matro-text:    #9A3412;
+  --cal-toca-bg:       #E5E7EB;
+  --cal-toca-text:     #1F2937;
+  --cal-noasiste-bg:   #BBF7D0;
+  --cal-noasiste-text: #14532D;
+  --cal-prueba-bg:     #FBCFE8;
+  --cal-prueba-text:   #831843;
+  --cal-mensaje-bg:    #DDD6FE;
+  --cal-mensaje-text:  #4C1D95;
+  --cal-repo-border:   #EA580C;
+}
+
+/* ── Tipografía global ───────────────────────────────────────────────────── */
+body {
+  font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5, h6,
+.font-serif {
+  font-family: 'Fraunces', 'Times New Roman', serif;
+}

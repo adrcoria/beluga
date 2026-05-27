@@ -1,0 +1,47 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Invoke-WebRequest -Uri \"https://getcomposer.org/composer-stable.phar\" -OutFile \"C:\\\\xampp\\\\php\\\\composer.phar\" -UseBasicParsing; Write-Host \"Descargado:\" \\(Get-Item \"C:\\\\xampp\\\\php\\\\composer.phar\"\\).Length \"bytes\")",
+      "Bash(grep -n \"Listen\\\\|8080\\\\|httpd-vhosts\" \"C:/xampp/apache/conf/httpd.conf\" | head -20)",
+      "Read(//c/xampp/apache/conf/**)",
+      "Bash(ls \"C:/xampp/htdocs/beluga/vendor/\" 2>&1 | head -10)",
+      "Read(//c/xampp/htdocs/beluga/vendor/**)",
+      "PowerShell(Get-Process -Name httpd -ErrorAction SilentlyContinue)",
+      "PowerShell(Stop-Process -Force)",
+      "PowerShell(Start-Process -FilePath \"C:\\\\xampp\\\\apache\\\\bin\\\\httpd.exe\" -WindowStyle Hidden)",
+      "Bash(tasklist)",
+      "Read(//c/xampp/htdocs/beluga/**)",
+      "Bash(/c/xampp/php/php.exe /c/xampp/php/composer.phar install --no-dev --no-security-blocking --no-interaction)",
+      "Bash(curl -s -X POST http://localhost:8080/api/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"admin@acuaticabeluga.com\",\"password\":\"Beluga2025!\"}')",
+      "Bash(/c/xampp/php/php.exe -r \"echo password_hash\\('Beluga2025!', PASSWORD_BCRYPT, ['cost'=>12]\\);\")",
+      "Bash(npm install *)",
+      "Bash(npm uninstall *)",
+      "Bash(npx vite *)",
+      "Bash(cp \"c:/Users/cofa616206/Documents/beluga/backend/src/Domain/Calendario/CalendarioService.php\" \"c:/xampp/htdocs/beluga/src/Domain/Calendario/CalendarioService.php\")",
+      "Bash(cp \"c:/Users/cofa616206/Documents/beluga/backend/src/Infrastructure/Persistence/MySql/CalendarioMySqlService.php\" \"c:/xampp/htdocs/beluga/src/Infrastructure/Persistence/MySql/CalendarioMySqlService.php\")",
+      "Bash(cp \"c:/Users/cofa616206/Documents/beluga/backend/src/Application/Actions/Calendario/ObtenerHorarioAlumnoAction.php\" \"c:/xampp/htdocs/beluga/src/Application/Actions/Calendario/ObtenerHorarioAlumnoAction.php\")",
+      "Bash(cp \"c:/Users/cofa616206/Documents/beluga/backend/config/routes.php\" \"c:/xampp/htdocs/beluga/config/routes.php\")",
+      "Bash(Copy-Item \"C:\\\\Users\\\\cofa616206\\\\Documents\\\\beluga\\\\backend\\\\src\\\\Infrastructure\\\\Mail\\\\Mailer.php\" \"C:\\\\xampp\\\\htdocs\\\\beluga\\\\src\\\\Infrastructure\\\\Mail\\\\Mailer.php\" -Force)",
+      "Bash(cp \"c:/Users/cofa616206/Documents/beluga/backend/src/Infrastructure/Mail/Mailer.php\" \"c:/xampp/htdocs/beluga/src/Infrastructure/Mail/Mailer.php\")",
+      "Bash(cp \"c:/Users/cofa616206/Documents/beluga/backend/src/Application/Actions/Auth/LoginAction.php\" \"c:/xampp/htdocs/beluga/src/Application/Actions/Auth/LoginAction.php\")",
+      "Bash(xcopy /Y \"c:\\\\xampp\\\\htdocs\\\\beluga\\\\config\\\\routes.php\" \"c:\\\\Users\\\\cofa616206\\\\Documents\\\\beluga\\\\backend\\\\config\\\\routes.php*\")",
+      "Bash(xcopy /Y \"c:\\\\xampp\\\\htdocs\\\\beluga\\\\config\\\\container.php\" \"c:\\\\Users\\\\cofa616206\\\\Documents\\\\beluga\\\\backend\\\\config\\\\container.php*\")",
+      "Bash(Copy-Item -Force \"c:\\\\xampp\\\\htdocs\\\\beluga\\\\config\\\\routes.php\" \"c:\\\\Users\\\\cofa616206\\\\Documents\\\\beluga\\\\backend\\\\config\\\\routes.php\")",
+      "Bash(Copy-Item -Force \"c:\\\\xampp\\\\htdocs\\\\beluga\\\\config\\\\container.php\" \"c:\\\\Users\\\\cofa616206\\\\Documents\\\\beluga\\\\backend\\\\config\\\\container.php\")",
+      "PowerShell(Copy-Item -Force \"c:\\\\xampp\\\\htdocs\\\\beluga\\\\config\\\\routes.php\" \"c:\\\\Users\\\\cofa616206\\\\Documents\\\\beluga\\\\backend\\\\config\\\\routes.php\")",
+      "PowerShell(Copy-Item -Force \"c:\\\\xampp\\\\htdocs\\\\beluga\\\\src\\\\Domain\\\\Cobro\\\\CobroRepository.php\" \"c:\\\\Users\\\\cofa616206\\\\Documents\\\\beluga\\\\backend\\\\src\\\\Domain\\\\Cobro\\\\CobroRepository.php\")",
+      "PowerShell(Copy-Item -Force \"c:\\\\xampp\\\\htdocs\\\\beluga\\\\src\\\\Infrastructure\\\\Persistence\\\\MySql\\\\CobroMySqlRepository.php\" \"c:\\\\Users\\\\cofa616206\\\\Documents\\\\beluga\\\\backend\\\\src\\\\Infrastructure\\\\Persistence\\\\MySql\\\\CobroMySqlRepository.php\")",
+      "PowerShell(Copy-Item -Force \"c:\\\\xampp\\\\htdocs\\\\beluga\\\\src\\\\Application\\\\Actions\\\\Cobros\\\\GenerarCobrosAction.php\" \"c:\\\\Users\\\\cofa616206\\\\Documents\\\\beluga\\\\backend\\\\src\\\\Application\\\\Actions\\\\Cobros\\\\GenerarCobrosAction.php\")",
+      "PowerShell(& \"c:\\\\xampp\\\\php\\\\php.exe\" \"c:\\\\xampp\\\\php\\\\composer.phar\" dump-autoload --working-dir \"c:\\\\xampp\\\\htdocs\\\\beluga\" 2>&1)",
+      "PowerShell(Test-NetConnection -ComputerName localhost -Port 8080 -WarningAction SilentlyContinue)",
+      "PowerShell(Copy-Item -Force \"c:\\\\xampp\\\\htdocs\\\\beluga\\\\src\\\\Application\\\\Actions\\\\Alumnos\\\\CrearAlumnoAction.php\" \"c:\\\\Users\\\\cofa616206\\\\Documents\\\\beluga\\\\backend\\\\src\\\\Application\\\\Actions\\\\Alumnos\\\\CrearAlumnoAction.php\")",
+      "PowerShell(& \"c:\\\\xampp\\\\php\\\\php.exe\" \"c:\\\\xampp\\\\php\\\\composer.phar\" dump-autoload --working-dir \"c:\\\\xampp\\\\htdocs\\\\beluga\")",
+      "Bash(npm run *)",
+      "Bash(node -e \"console.log\\(require\\('crypto'\\).randomBytes\\(32\\).toString\\('hex'\\)\\)\")"
+    ],
+    "additionalDirectories": [
+      "c:\\xampp\\htdocs\\beluga\\src\\Infrastructure\\Mail",
+      "c:\\xampp\\htdocs\\beluga\\src\\Application\\Actions\\Auth"
+    ]
+  }
+}

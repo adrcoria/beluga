@@ -1,0 +1,20 @@
+# ── Frontend ──────────────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+
+# ── Backend ───────────────────────────────────────────────────────────────
+backend/vendor/
+backend/.env
+backend/logs/
+backend/var/
+
+# ── Editores / OS ─────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/settings.json
+*.swp
+*.swo
