@@ -3,6 +3,7 @@ import { useApi } from './useApi'
 export interface AlumnoResumen {
   folio: string
   nombre: string
+  fechaNacimiento?: string
   foto?: string
   modalidad: 'PART' | 'GRUPAL' | 'MATRO'
   plan: { clasesSemana: number; mensualidad: number; label: string | null }
@@ -84,5 +85,9 @@ export function useAlumnos() {
     return api.delete(`/api/planes/${id}`)
   }
 
-  return { listar, obtener, crear, actualizar, listarPlanes, crearPlan, actualizarPlan, eliminarPlan }
+  function eliminar(folio: string): Promise<void> {
+    return api.delete(`/api/alumnos/${folio}`)
+  }
+
+  return { listar, obtener, crear, actualizar, eliminar, listarPlanes, crearPlan, actualizarPlan, eliminarPlan }
 }

@@ -4,14 +4,18 @@ import { useRouter } from 'vue-router'
 import { VForm } from 'vuetify/components'
 import * as XLSX from 'xlsx'
 import { useAlumnos, planesAMapa, type AlumnoResumen, type PlanCatalogo } from '@/composables/useAlumnos'
+import { useModalidades, type Modalidad } from '@/composables/useModalidades'
 import { useSwal } from '@/composables/useSwal'
 import { useSucursalStore } from '@/stores/sucursal'
 
-const { exito } = useSwal()
+const { exito, confirmar } = useSwal()
 
 const router         = useRouter()
 const alumnos        = useAlumnos()
+const modApi         = useModalidades()
 const sucursalStore  = useSucursalStore()
+
+const modalidades    = ref<Modalidad[]>([])
 
 const lista      = ref<AlumnoResumen[]>([])
 const cargando   = ref(false)
@@ -33,12 +37,16 @@ async function cargarPlanes() {
   try { planes.value = await alumnos.listarPlanes() } catch {}
 }
 
+async function cargarModalidades() {
+  try { modalidades.value = await modApi.listar() } catch {}
+}
+
 // ── Carga ─────────────────────────────────────────────────────────────────
 async function cargar() {
   cargando.value = true; errorMsg.value = ''
   try {
     const params: Record<string,string> = {}
-    if (busqueda.value.trim()) params.busqueda  = busqueda.value.trim()
+    if (busqueda.value.trim()) params.q = busqueda.value.trim()
     if (filtroMod.value)       params.modalidad  = filtroMod.value
     if (filtroSt.value)        params.status     = filtroSt.value
     if (filtroPago.value === 'toca_pago') params.toca_pago = '1'
@@ -50,7 +58,7 @@ async function cargar() {
 let timer: ReturnType<typeof setTimeout>
 watch(busqueda, () => { clearTimeout(timer); timer = setTimeout(cargar, 350) })
 watch([filtroMod, filtroSt, filtroPago], cargar)
-onMounted(() => { cargar(); cargarPlanes() })
+onMounted(() => { cargar(); cargarPlanes(); cargarModalidades() })
 
 // ── Filtro local vencido ──────────────────────────────────────────────────
 const listaFinal = computed(() =>
@@ -183,6 +191,110 @@ async function guardar() {
     exito('¡Alumno registrado!', 'El alumno fue dado de alta correctamente.')
   } catch (e: any) { errorAlta.value = e.message }
   finally { guardando.value = false }
+}
+
+// ── Formulario editar ─────────────────────────────────────────────────────
+const modalEditar         = ref(false)
+const guardandoEdit       = ref(false)
+const errorEdit           = ref('')
+const formEditRef         = ref<InstanceType<typeof VForm>>()
+const alumnoEditandoFolio = ref('')
+
+const formEdit = ref({
+  nombre: '', fechaNacimiento: '', fechaInicio: '', tutor: '', telefono: '', email: '',
+  modalidad: 'GRUPAL', clasesSemana: 1, mensualidad: 0,
+  aplicarDescuento: false, descuentoPct: '' as string | number, descuentoMotivo: '',
+  status: 'activo',
+})
+const fechaInicioOriginal = ref('')
+
+const clasesDisponiblesEdit = computed(() =>
+  planes.value
+    .filter(p => p.modalidad === formEdit.value.modalidad && p.activo)
+    .sort((a, b) => a.clasesSemana - b.clasesSemana)
+    .map(p => ({ title: `${p.clasesSemana} clase${p.clasesSemana > 1 ? 's' : ''}/semana`, value: p.clasesSemana }))
+)
+
+const descPctEdit      = computed(() => formEdit.value.aplicarDescuento ? parseFloat(String(formEdit.value.descuentoPct)) || 0 : 0)
+const montoDescEdit    = computed(() => formEdit.value.mensualidad * descPctEdit.value / 100)
+const montoFinalEdit   = computed(() => formEdit.value.mensualidad - montoDescEdit.value)
+const tieneResumenEdit = computed(() => descPctEdit.value > 0 && formEdit.value.mensualidad > 0)
+
+function onModalidadEditChange() {
+  const primero = clasesDisponiblesEdit.value[0]
+  if (!primero) return
+  formEdit.value.clasesSemana = primero.value
+  const p = planCatalogo.value[formEdit.value.modalidad]?.[primero.value]
+  if (p) formEdit.value.mensualidad = p
+}
+
+function onClasesEditChange() {
+  const p = planCatalogo.value[formEdit.value.modalidad]?.[formEdit.value.clasesSemana]
+  if (p) formEdit.value.mensualidad = p
+}
+
+function abrirEditar(a: AlumnoResumen) {
+  alumnoEditandoFolio.value = a.folio
+  fechaInicioOriginal.value = a.fechaInicio
+  const precioBase = planCatalogo.value[a.modalidad]?.[a.plan.clasesSemana] ?? a.plan.mensualidad
+  formEdit.value = {
+    nombre:           a.nombre,
+    fechaNacimiento:  a.fechaNacimiento ?? '',
+    fechaInicio:      a.fechaInicio,
+    tutor:            a.contacto.tutor ?? '',
+    telefono:         a.contacto.telefono,
+    email:            a.contacto.email ?? '',
+    modalidad:        a.modalidad,
+    clasesSemana:     a.plan.clasesSemana,
+    mensualidad:      precioBase,
+    aplicarDescuento: !!a.descuento,
+    descuentoPct:     a.descuento?.pct ?? '',
+    descuentoMotivo:  a.descuento?.motivo ?? '',
+    status:           a.status,
+  }
+  errorEdit.value = ''
+  modalEditar.value = true
+}
+
+async function eliminarAlumno(a: AlumnoResumen) {
+  const { isConfirmed } = await confirmar(
+    `¿Eliminar a ${a.nombre}?`,
+    'Esta acción es permanente y no se puede deshacer.',
+  )
+  if (!isConfirmed) return
+  try {
+    await alumnos.eliminar(a.folio)
+    await cargar()
+    exito('Alumno eliminado', 'El registro fue eliminado permanentemente.')
+  } catch (e: any) { errorMsg.value = e.message }
+}
+
+async function guardarEditar() {
+  const { valid } = await formEditRef.value!.validate()
+  if (!valid) return
+  guardandoEdit.value = true; errorEdit.value = ''
+  try {
+    await alumnos.actualizar(alumnoEditandoFolio.value, {
+      nombre:          formEdit.value.nombre.trim(),
+      fechaNacimiento: formEdit.value.fechaNacimiento || null,
+      fechaInicio:     formEdit.value.fechaInicio,
+      contacto: {
+        tutor:    formEdit.value.tutor || null,
+        telefono: formEdit.value.telefono,
+        email:    formEdit.value.email || null,
+      },
+      modalidad: formEdit.value.modalidad,
+      plan: { clasesSemana: formEdit.value.clasesSemana, mensualidad: montoFinalEdit.value },
+      descuento: descPctEdit.value > 0
+        ? { pct: descPctEdit.value, motivo: formEdit.value.descuentoMotivo }
+        : null,
+      status: formEdit.value.status,
+    })
+    modalEditar.value = false
+    await cargar()
+    exito('Alumno actualizado', 'Los datos fueron guardados correctamente.')
+  } catch (e: any) { errorEdit.value = e.message }
+  finally { guardandoEdit.value = false }
 }
 
 // ── Importación masiva ────────────────────────────────────────────────────
@@ -341,12 +453,12 @@ async function ejecutarImport() {
 
     <!-- Stats rápidas -->
     <v-row dense>
-      <v-col v-for="s in [
-        { label:'Total activos', val: stats.total,    color:'#0a1e6e', cursor:'default' },
-        { label:'Al día',        val: stats.alDia,    color:'#15803d', cursor:'pointer', pago:'aldía' },
-        { label:'Toca pago',     val: stats.tocaPago, color:'#d97706', cursor:'pointer', pago:'toca_pago' },
-        { label:'Vencidos',      val: stats.vencidos, color:'#dc2626', cursor:'pointer', pago:'vencido' },
-      ]" :key="s.label" cols="6" md="3">
+      <v-col v-for="s in ([
+        { label:'Total activos', val: stats.total,    color:'#0a1e6e', cursor:'default',  pago:'' },
+        { label:'Al día',        val: stats.alDia,    color:'#15803d', cursor:'pointer',  pago:'aldía' },
+        { label:'Toca pago',     val: stats.tocaPago, color:'#d97706', cursor:'pointer',  pago:'toca_pago' },
+        { label:'Vencidos',      val: stats.vencidos, color:'#dc2626', cursor:'pointer',  pago:'vencido' },
+      ] as const)" :key="s.label" cols="6" md="3">
         <v-card rounded="xl" border :style="{ cursor: s.cursor, outline: filtroPago === s.pago ? '2px solid '+s.color : 'none' }"
           @click="s.pago ? filtroPago = filtroPago === s.pago ? 'todos' : s.pago : null">
           <v-card-text class="pa-4">
@@ -376,7 +488,7 @@ async function ejecutarImport() {
           />
           <v-select
             v-model="filtroMod"
-            :items="[{title:'Todas las modalidades',value:''},{title:'PART',value:'PART'},{title:'GRUPAL',value:'GRUPAL'},{title:'MATRO',value:'MATRO'}]"
+            :items="[{title:'Todas las modalidades',value:''},...modalidades.map(m=>({title:m.clave,value:m.clave}))]"
             density="compact"
             rounded="lg"
             variant="outlined"
@@ -457,7 +569,13 @@ async function ejecutarImport() {
               </v-chip>
             </td>
             <td>
-              <v-icon icon="mdi-chevron-right" size="18" color="grey-lighten-1" />
+              <div class="d-flex align-center justify-end ga-1">
+                <v-btn icon="mdi-pencil-outline" size="x-small" variant="text" color="grey"
+                  @click.stop="abrirEditar(a)" />
+                <v-btn icon="mdi-trash-can-outline" size="x-small" variant="text" color="error"
+                  @click.stop="eliminarAlumno(a)" />
+                <v-icon icon="mdi-chevron-right" size="18" color="grey-lighten-1" />
+              </div>
             </td>
           </tr>
         </tbody>
@@ -520,21 +638,13 @@ async function ejecutarImport() {
                 :rules="[v => !v || /.+@.+\..+/.test(v) || 'Email inválido']"
               />
             </v-col>
-            <v-col cols="12" sm="6">
-              <v-select
-                v-model="form.status"
-                :items="[{title:'Activo',value:'activo'},{title:'Clase de prueba',value:'prueba'},{title:'Inactivo (baja)',value:'baja'}]"
-                label="Status inicial"
-                density="compact" variant="outlined" rounded="lg"
-              />
-            </v-col>
 
             <!-- Plan -->
             <v-col cols="12"><p class="section-label mt-2">Plan y fechas</p></v-col>
             <v-col cols="12" sm="6">
               <v-select
                 v-model="form.modalidad"
-                :items="[{title:'GRUPAL',value:'GRUPAL'},{title:'PART (particular)',value:'PART'},{title:'MATRO (matrona)',value:'MATRO'}]"
+                :items="modalidades.map(m => ({ title: `${m.clave} — ${m.label}`, value: m.clave }))"
                 label="Modalidad" density="compact" variant="outlined" rounded="lg"
               />
             </v-col>
@@ -852,6 +962,187 @@ async function ejecutarImport() {
           <template v-else-if="importPaso === 'resultado'">
             <v-btn color="primary" rounded="lg" @click="modalImportar = false">Cerrar</v-btn>
           </template>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- Modal: Editar alumno -->
+    <v-dialog v-model="modalEditar" max-width="680" persistent scrollable>
+      <v-card rounded="xl">
+        <div style="background:linear-gradient(135deg,#f0fdf4,#dcfce7);padding:20px 24px;border-radius:16px 16px 0 0;border-bottom:1px solid #bbf7d0" class="d-flex align-center justify-space-between">
+          <div>
+            <div style="color:#15803d;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px">Editar alumno</div>
+            <div style="color:#14532d;font-size:18px;font-weight:700;font-family:'Fraunces',serif">{{ formEdit.nombre || '—' }}</div>
+          </div>
+          <v-btn icon="mdi-close" variant="text" color="#14532d" @click="modalEditar = false" />
+        </div>
+
+        <v-form ref="formEditRef">
+        <v-card-text class="pa-5">
+          <v-row dense>
+            <!-- Datos personales -->
+            <v-col cols="12"><p class="section-label">Datos personales</p></v-col>
+            <v-col cols="12" sm="6">
+              <v-text-field
+                v-model="formEdit.nombre"
+                label="Nombre completo *"
+                density="compact" variant="outlined" rounded="lg"
+                :rules="[v => !!v?.trim() || 'Campo requerido', v => v.trim().length >= 2 || 'Mínimo 2 caracteres']"
+              />
+            </v-col>
+            <v-col cols="12" sm="6">
+              <v-text-field
+                v-model="formEdit.fechaNacimiento"
+                label="Fecha de nacimiento"
+                type="date"
+                density="compact" variant="outlined" rounded="lg"
+                :max="maxFechaNac"
+              />
+            </v-col>
+            <v-col cols="12" sm="6">
+              <v-text-field v-model="formEdit.tutor" label="Tutor / Mamá / Papá" density="compact" variant="outlined" rounded="lg" />
+            </v-col>
+            <v-col cols="12" sm="6">
+              <v-text-field
+                v-model="formEdit.telefono"
+                label="Teléfono *"
+                density="compact" variant="outlined" rounded="lg"
+                prepend-inner-icon="mdi-phone-outline"
+                :rules="[v => !!v?.trim() || 'Campo requerido', v => /^\d{7,15}$/.test(v.replace(/[\s\-\(\)]/g,'')) || 'Teléfono inválido']"
+              />
+            </v-col>
+            <v-col cols="12" sm="8">
+              <v-text-field
+                v-model="formEdit.email"
+                label="Correo electrónico"
+                type="email"
+                density="compact" variant="outlined" rounded="lg"
+                prepend-inner-icon="mdi-email-outline"
+                :rules="[v => !v || /.+@.+\..+/.test(v) || 'Email inválido']"
+              />
+            </v-col>
+            <v-col cols="12" sm="4">
+              <v-select
+                v-model="formEdit.status"
+                :items="[{title:'Activo',value:'activo'},{title:'Prueba',value:'prueba'},{title:'Baja',value:'baja'}]"
+                label="Status"
+                density="compact" variant="outlined" rounded="lg"
+              />
+            </v-col>
+
+            <!-- Fecha de inicio -->
+            <v-col cols="12"><p class="section-label mt-2">Fecha de inicio</p></v-col>
+            <v-col cols="12" sm="6">
+              <v-text-field
+                v-model="formEdit.fechaInicio"
+                label="Fecha de inscripción *"
+                type="date"
+                density="compact" variant="outlined" rounded="lg"
+                :max="hoy"
+                :rules="[v => !!v || 'Campo requerido']"
+              />
+            </v-col>
+            <v-col cols="12" sm="6" class="d-flex align-items-center">
+              <v-alert
+                v-if="formEdit.fechaInicio !== fechaInicioOriginal"
+                type="warning" density="compact" variant="tonal" rounded="lg"
+                icon="mdi-alert-outline"
+                style="font-size:12px"
+              >
+                Cambiar la fecha recalcula el <strong>día de pago</strong> del alumno.
+              </v-alert>
+            </v-col>
+
+            <!-- Plan -->
+            <v-col cols="12"><p class="section-label mt-2">Plan</p></v-col>
+            <v-col cols="12" sm="6">
+              <v-select
+                v-model="formEdit.modalidad"
+                :items="modalidades.map(m => ({ title: `${m.clave} — ${m.label}`, value: m.clave }))"
+                label="Modalidad"
+                density="compact" variant="outlined" rounded="lg"
+                @update:modelValue="onModalidadEditChange"
+              />
+            </v-col>
+            <v-col cols="12" sm="6">
+              <v-select
+                v-model.number="formEdit.clasesSemana"
+                :items="clasesDisponiblesEdit"
+                label="Clases por semana"
+                density="compact" variant="outlined" rounded="lg"
+                @update:modelValue="onClasesEditChange"
+              />
+            </v-col>
+            <v-col cols="12" sm="6">
+              <v-text-field
+                v-model.number="formEdit.mensualidad"
+                label="Mensualidad base *"
+                type="number"
+                prefix="$"
+                density="compact" variant="outlined" rounded="lg"
+                bg-color="#eff6ff"
+                style="font-weight:700"
+                :rules="[v => v > 0 || 'Ingresa la mensualidad']"
+              />
+            </v-col>
+            <v-col cols="12" sm="6" class="d-flex align-center">
+              <v-checkbox
+                v-model="formEdit.aplicarDescuento"
+                label="Aplicar descuento"
+                density="compact"
+                hide-details
+                color="primary"
+              />
+            </v-col>
+            <template v-if="formEdit.aplicarDescuento">
+              <v-col cols="12" sm="6">
+                <v-text-field
+                  v-model="formEdit.descuentoPct"
+                  label="Descuento %"
+                  type="number" min="0" max="100"
+                  density="compact" variant="outlined" rounded="lg"
+                  :rules="[v => !v || (Number(v) >= 0 && Number(v) <= 100) || 'Entre 0 y 100']"
+                />
+              </v-col>
+              <v-col cols="12" sm="6">
+                <v-text-field
+                  v-model="formEdit.descuentoMotivo"
+                  label="Motivo del descuento"
+                  density="compact" variant="outlined" rounded="lg"
+                  placeholder="Hermanos, empleado…"
+                  :rules="[v => !descPctEdit || !!v?.trim() || 'Indica el motivo']"
+                />
+              </v-col>
+            </template>
+
+            <v-col v-if="formEdit.mensualidad > 0" cols="12">
+              <div class="resumen-precio">
+                <template v-if="tieneResumenEdit">
+                  <div class="resumen-row">
+                    <span>Mensualidad base</span>
+                    <span>{{ fmt(formEdit.mensualidad) }}</span>
+                  </div>
+                  <div class="resumen-row text-medium-emphasis">
+                    <span>Descuento ({{ descPctEdit }}%)</span>
+                    <span style="color:#dc2626">− {{ fmt(montoDescEdit) }}</span>
+                  </div>
+                  <v-divider class="my-2" />
+                </template>
+                <div class="resumen-row resumen-total">
+                  <span>Mensualidad a cobrar</span>
+                  <span style="color:#0a1e6e;font-family:'Fraunces',serif">{{ fmt(montoFinalEdit) }}</span>
+                </div>
+              </div>
+            </v-col>
+          </v-row>
+        </v-card-text>
+        </v-form>
+
+        <v-divider />
+        <v-card-actions class="pa-4 ga-2 justify-end">
+          <v-alert v-if="errorEdit" type="error" density="compact" variant="tonal" rounded="lg" class="mr-auto" style="flex:1">{{ errorEdit }}</v-alert>
+          <v-btn variant="text" @click="modalEditar = false">Cancelar</v-btn>
+          <v-btn color="success" rounded="lg" :loading="guardandoEdit" @click="guardarEditar">Guardar cambios</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

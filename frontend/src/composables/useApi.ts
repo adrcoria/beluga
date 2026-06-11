@@ -13,29 +13,41 @@ export function useApi() {
     }
   }
 
+  async function errorMsg(res: Response): Promise<never> {
+    let msg = `Error ${res.status}`
+    try { msg = (await res.json()).error ?? msg } catch { /* response was not JSON */ }
+    throw new Error(msg)
+  }
+
   async function get<T>(url: string): Promise<T> {
     const res = await fetch(apiBase + url, { headers: headers() })
-    if (!res.ok) throw new Error((await res.json()).error ?? `Error ${res.status}`)
+    if (!res.ok) return errorMsg(res)
     return res.json()
   }
 
   async function post<T>(url: string, body: unknown): Promise<T> {
     const res = await fetch(apiBase + url, { method: 'POST', headers: headers(), body: JSON.stringify(body) })
-    if (!res.ok) throw new Error((await res.json()).error ?? `Error ${res.status}`)
+    if (!res.ok) return errorMsg(res)
     return res.json()
   }
 
   async function put<T>(url: string, body: unknown): Promise<T> {
     const res = await fetch(apiBase + url, { method: 'PUT', headers: headers(), body: JSON.stringify(body) })
-    if (!res.ok) throw new Error((await res.json()).error ?? `Error ${res.status}`)
+    if (!res.ok) return errorMsg(res)
+    return res.json()
+  }
+
+  async function patch<T>(url: string, body: unknown): Promise<T> {
+    const res = await fetch(apiBase + url, { method: 'PATCH', headers: headers(), body: JSON.stringify(body) })
+    if (!res.ok) return errorMsg(res)
     return res.json()
   }
 
   async function del<T>(url: string): Promise<T> {
     const res = await fetch(apiBase + url, { method: 'DELETE', headers: headers() })
-    if (!res.ok) throw new Error((await res.json()).error ?? `Error ${res.status}`)
+    if (!res.ok) return errorMsg(res)
     return res.json()
   }
 
-  return { get, post, put, delete: del }
+  return { get, post, put, patch, delete: del }
 }

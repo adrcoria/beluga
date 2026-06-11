@@ -70,7 +70,7 @@ async function iniciarSesion() {
     if (!res.ok) throw new Error(data.error ?? 'Credenciales incorrectas')
 
     if (recordar.value) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ email: email.value }))
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ email: email.value, password: password.value }))
     } else {
       localStorage.removeItem(STORAGE_KEY)
     }
@@ -162,7 +162,12 @@ function volverACredenciales() {
 onMounted(() => {
   const raw = localStorage.getItem(STORAGE_KEY)
   if (raw) {
-    try { email.value = JSON.parse(raw).email ?? ''; recordar.value = true } catch {}
+    try {
+      const saved = JSON.parse(raw)
+      email.value    = saved.email    ?? ''
+      password.value = saved.password ?? ''
+      recordar.value = true
+    } catch {}
   }
 
   const container = document.getElementById('bubbles-login')
@@ -230,7 +235,7 @@ onMounted(() => {
           />
           <v-checkbox
             v-model="recordar"
-            label="Recordar correo"
+            label="Recordar mis datos"
             density="compact"
             color="primary"
             hide-details

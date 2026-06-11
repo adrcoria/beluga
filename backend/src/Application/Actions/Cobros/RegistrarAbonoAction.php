@@ -29,11 +29,12 @@ class RegistrarAbonoAction extends Action
 
         try {
             $cobro = $this->cobros->registrarAbono(
-                cobroId:    $this->args['id'],
-                monto:      (float) $body['monto'],
-                metodo:     $body['metodo'],
-                usuarioId:  $usuarioId,
-                sucursalId: $body['sucursalId'],
+                cobroId:         $this->args['id'],
+                monto:           (float) $body['monto'],
+                metodo:          $body['metodo'],
+                usuarioId:       $usuarioId,
+                sucursalId:      $body['sucursalId'],
+                requiereFactura: (bool) ($body['requiereFactura'] ?? false),
             );
             return $this->json($cobro, 201);
         } catch (\RuntimeException $e) {

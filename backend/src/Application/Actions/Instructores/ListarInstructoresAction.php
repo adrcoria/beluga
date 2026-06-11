@@ -20,8 +20,8 @@ class ListarInstructoresAction extends Action
 
     protected function action(): Response
     {
-        $sucursal     = $this->getQueryParam('sucursal');
-        $instructores = $this->repo->listar($sucursal);
-        return $this->json($instructores);
+        $sucursal = $this->getQueryParam('sucursal');
+        $todos    = $this->getQueryParam('todos') === 'true';
+        return $this->json($this->repo->listar($sucursal, $todos));
     }
 }

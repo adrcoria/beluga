@@ -2,9 +2,11 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useSucursalStore } from '@/stores/sucursal'
+import { useUiStore } from '@/stores/ui'
 
 const route         = useRoute()
 const sucursalStore = useSucursalStore()
+const ui            = useUiStore()
 
 const titulo  = computed(() => route.meta.titulo as string ?? '')
 const seccion = computed(() => {
@@ -16,6 +18,15 @@ const ahora = computed(() => new Date().toLocaleDateString('es-MX', { weekday:'s
 
 <template>
   <v-app-bar elevation="0" color="white" border="b" height="64">
+    <template #prepend>
+      <v-btn
+        :icon="ui.sidebarColapsado ? 'mdi-menu' : 'mdi-menu-open'"
+        variant="text"
+        color="#0a1e6e"
+        @click="ui.toggleSidebar()"
+      />
+    </template>
+
     <v-app-bar-title>
       <div style="line-height:1">
         <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.12em;color:#9ca3af;margin-bottom:2px">

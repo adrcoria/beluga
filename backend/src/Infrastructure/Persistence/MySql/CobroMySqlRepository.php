@@ -26,12 +26,15 @@ class CobroMySqlRepository implements CobroRepository
             $params[':folio']    = $filtros['alumno_folio'];
         }
         if (!empty($filtros['busqueda'])) {
-            $where[]   = '(a.nombre LIKE :q OR a.folio LIKE :q)';
-            $params[':q'] = '%' . $filtros['busqueda'] . '%';
+            $where[]       = '(a.nombre LIKE :q1 OR a.folio LIKE :q2)';
+            $q             = '%' . $filtros['busqueda'] . '%';
+            $params[':q1'] = $q;
+            $params[':q2'] = $q;
         }
 
         $sql = 'SELECT c.*, a.nombre AS alumno_nombre, a.foto AS alumno_foto,
-                       a.telefono AS alumno_telefono, a.saldo_favor AS alumno_saldo_favor
+                       a.telefono AS alumno_telefono, a.email AS alumno_email,
+                       a.saldo_favor AS alumno_saldo_favor
                 FROM cobros c
                 JOIN alumnos a ON a.folio = c.alumno_folio
                 WHERE ' . implode(' AND ', $where) . '
@@ -46,7 +49,8 @@ class CobroMySqlRepository implements CobroRepository
     {
         $stmt = $this->pdo->prepare(
             'SELECT c.*, a.nombre AS alumno_nombre, a.foto AS alumno_foto,
-                    a.telefono AS alumno_telefono, a.saldo_favor AS alumno_saldo_favor,
+                    a.telefono AS alumno_telefono, a.email AS alumno_email,
+                    a.saldo_favor AS alumno_saldo_favor,
                     a.modalidad AS alumno_modalidad, a.clases_semana AS alumno_clases_semana
              FROM cobros c
              JOIN alumnos a ON a.folio = c.alumno_folio
@@ -57,7 +61,7 @@ class CobroMySqlRepository implements CobroRepository
         return $row ? $this->mapear($row) : null;
     }
 
-    public function registrarAbono(string $cobroId, float $monto, string $metodo, string $usuarioId, string $sucursalId): array
+    public function registrarAbono(string $cobroId, float $monto, string $metodo, string $usuarioId, string $sucursalId, bool $requiereFactura = false): array
     {
         $cobro = $this->porId($cobroId);
         if (!$cobro) {
@@ -77,10 +81,11 @@ class CobroMySqlRepository implements CobroRepository
         $nuevoMontoPagado = round($cobro['montoPagado'] + $abonoReal, 2);
         $nuevoEstado      = $nuevoMontoPagado >= $cobro['montoNeto'] ? 'pagado' : 'parcial';
 
-        $ticket = strtoupper('BLG-' . date('ymd') . '-' . substr(uniqid(), -5));
-
         $this->pdo->beginTransaction();
         try {
+            // 0. Folio consecutivo de la sucursal (atómico)
+            $ticket = (string) $this->siguienteFolioPago($sucursalId);
+
             // 1. Registrar pago en tabla pagos
             $this->pdo->prepare(
                 'INSERT INTO pagos (id, alumno_folio, concepto, monto, metodo, fecha, ticket,
@@ -100,12 +105,13 @@ class CobroMySqlRepository implements CobroRepository
                 ':sucursal' => $sucursalId,
             ]);
 
-            // 2. Actualizar cobro
+            // 2. Actualizar cobro (incluye si requiere factura)
             $this->pdo->prepare(
-                'UPDATE cobros SET monto_pagado = :pagado, estado = :estado WHERE id = :id'
+                'UPDATE cobros SET monto_pagado = :pagado, estado = :estado, requiere_factura = :rf WHERE id = :id'
             )->execute([
                 ':pagado' => $nuevoMontoPagado,
                 ':estado' => $nuevoEstado,
+                ':rf'     => $requiereFactura ? 1 : 0,
                 ':id'     => $cobroId,
             ]);
 
@@ -176,17 +182,21 @@ class CobroMySqlRepository implements CobroRepository
                 UUID(),
                 a.folio,
                 \'mensualidad\',
-                ROUND(a.mensualidad * (1 - COALESCE(a.descuento_pct, 0) / 100), 2),
-                LEAST(a.saldo_favor, ROUND(a.mensualidad * (1 - COALESCE(a.descuento_pct, 0) / 100), 2)),
-                GREATEST(0, ROUND(a.mensualidad * (1 - COALESCE(a.descuento_pct, 0) / 100), 2) - a.saldo_favor),
+                a.mensualidad,
+                LEAST(a.saldo_favor, a.mensualidad),
+                GREATEST(0, a.mensualidad - a.saldo_favor),
                 CASE
-                    WHEN a.saldo_favor >= ROUND(a.mensualidad * (1 - COALESCE(a.descuento_pct, 0) / 100), 2)
+                    WHEN a.saldo_favor >= a.mensualidad
                     THEN \'pagado\' ELSE \'pendiente\'
                 END,
                 a.vencimiento,
                 DATE_ADD(a.vencimiento, INTERVAL 1 MONTH)
              FROM alumnos a
              WHERE a.status = \'activo\'
+               -- Solo generar cuando el cobro ya entra en la ventana de "toca pago"
+               -- (vence hoy, está vencido, o vence dentro de 7 días). Esto evita que
+               -- al pagar (vencimiento salta +1 mes) se regenere el siguiente de inmediato.
+               AND a.vencimiento <= DATE_ADD(CURDATE(), INTERVAL 7 DAY)
                AND NOT EXISTS (
                    SELECT 1 FROM cobros c
                    WHERE c.alumno_folio = a.folio
@@ -214,6 +224,52 @@ class CobroMySqlRepository implements CobroRepository
         return $stmt->rowCount();
     }
 
+    public function actualizarFactura(string $cobroId, ?bool $requiere, ?bool $realizada): array
+    {
+        $set = [];
+        $params = [':id' => $cobroId];
+        if ($requiere !== null) {
+            $set[] = 'requiere_factura = :rf';
+            $params[':rf'] = $requiere ? 1 : 0;
+        }
+        if ($realizada !== null) {
+            $set[] = 'factura_realizada = :fr';
+            $params[':fr'] = $realizada ? 1 : 0;
+        }
+        if ($set) {
+            $this->pdo->prepare('UPDATE cobros SET ' . implode(', ', $set) . ' WHERE id = :id')->execute($params);
+        }
+        return $this->porId($cobroId);
+    }
+
+    public function pagosDe(string $cobroId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT id, monto, metodo, fecha, ticket, concepto
+             FROM pagos WHERE cobro_id = ? ORDER BY fecha DESC, id DESC'
+        );
+        $stmt->execute([$cobroId]);
+        return array_map(fn($r) => [
+            'id'       => $r['id'],
+            'monto'    => (float) $r['monto'],
+            'metodo'   => $r['metodo'],
+            'fecha'    => $r['fecha'],
+            'ticket'   => $r['ticket'],
+            'concepto' => $r['concepto'],
+        ], $stmt->fetchAll());
+    }
+
+    /** Devuelve el siguiente folio consecutivo de la sucursal e incrementa el contador (atómico). */
+    private function siguienteFolioPago(string $sucursalId): int
+    {
+        $this->pdo->prepare('INSERT IGNORE INTO folio_pago_seq (sucursal_id, siguiente) VALUES (?, 1)')
+                  ->execute([$sucursalId]);
+        // LAST_INSERT_ID(siguiente) fija el folio a asignar y deja siguiente = folio + 1
+        $this->pdo->prepare('UPDATE folio_pago_seq SET siguiente = LAST_INSERT_ID(siguiente) + 1 WHERE sucursal_id = ?')
+                  ->execute([$sucursalId]);
+        return (int) $this->pdo->lastInsertId();
+    }
+
     private function mapear(array $row): array
     {
         return [
@@ -223,12 +279,15 @@ class CobroMySqlRepository implements CobroRepository
             'alumnoNombre'     => $row['alumno_nombre'],
             'alumnoFoto'       => $row['alumno_foto'] ?? null,
             'alumnoTelefono'   => $row['alumno_telefono'] ?? null,
+            'alumnoEmail'      => $row['alumno_email'] ?? null,
             'alumnoSaldoFavor' => (float) ($row['alumno_saldo_favor'] ?? 0),
             'montoBase'        => (float) $row['monto_base'],
             'saldoFavorAplicado' => (float) $row['saldo_favor_aplicado'],
             'montoNeto'        => (float) $row['monto_neto'],
             'montoPagado'      => (float) $row['monto_pagado'],
             'estado'           => $row['estado'],
+            'requiereFactura'  => (bool) ($row['requiere_factura'] ?? false),
+            'facturaRealizada' => (bool) ($row['factura_realizada'] ?? false),
             'periodoDesde'     => $row['periodo_desde'],
             'periodoHasta'     => $row['periodo_hasta'],
             'generadoEn'       => $row['generado_en'],

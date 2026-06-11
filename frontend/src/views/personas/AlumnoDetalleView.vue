@@ -20,6 +20,7 @@ interface SlotHorario {
   modalidad: string
   instructorNombre: string
   instructorIniciales: string
+  grupoNombre?: string | null
 }
 
 const ORDEN_DIAS: Record<string, string> = { L:'Lunes', M:'Martes', X:'Miércoles', J:'Jueves', V:'Viernes', S:'Sábado' }
@@ -280,7 +281,7 @@ function textMod(m: string) {
                 </v-card-title>
                 <v-card-text class="pa-4 pt-2">
                   <div v-if="!horario.length" style="font-size:13px;color:#9ca3af;text-align:center;padding:12px 0">
-                    Sin slots asignados — asignar desde el Calendario
+                    Sin horario asignado — asignar desde el Calendario
                   </div>
                   <template v-else>
                     <div
@@ -301,7 +302,10 @@ function textMod(m: string) {
                             {{ slot.horaInicio }} – {{ slot.horaFin }}
                           </span>
                         </div>
-                        <span style="font-size:12px;color:#6b7280">{{ slot.instructorNombre }}</span>
+                        <div class="text-right">
+                          <div style="font-size:12px;color:#6b7280">{{ slot.instructorNombre }}</div>
+                          <div v-if="slot.grupoNombre" style="font-size:10.5px;color:#9d174d;font-weight:600">{{ slot.grupoNombre }}</div>
+                        </div>
                       </div>
                     </div>
                   </template>

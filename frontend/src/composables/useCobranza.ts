@@ -14,10 +14,21 @@ export interface Cobro {
   montoNeto: number
   montoPagado: number
   estado: 'pendiente' | 'parcial' | 'pagado'
+  requiereFactura: boolean
+  facturaRealizada: boolean
   periodoDesde: string
   periodoHasta: string
   generadoEn: string
   ticket?: string
+}
+
+export interface PagoCobro {
+  id: string
+  monto: number
+  metodo: string
+  fecha: string
+  ticket: string | null
+  concepto: string
 }
 
 export const METODOS_PAGO = [
@@ -39,13 +50,21 @@ export function useCobranza() {
     return api.get(`/api/cobros/${id}`)
   }
 
-  function registrarAbono(id: string, datos: { monto: number; metodo: string; sucursalId: string }): Promise<Cobro> {
+  function registrarAbono(id: string, datos: { monto: number; metodo: string; sucursalId: string; requiereFactura?: boolean }): Promise<Cobro> {
     return api.post(`/api/cobros/${id}/abonos`, datos)
+  }
+
+  function marcarFactura(id: string, datos: { requiereFactura?: boolean; facturaRealizada?: boolean }): Promise<Cobro> {
+    return api.put(`/api/cobros/${id}/factura`, datos)
   }
 
   function generarCobros(): Promise<{ generados: number }> {
     return api.post('/api/cobros/generar', {})
   }
 
-  return { listar, obtener, registrarAbono, generarCobros }
+  function pagosDe(cobroId: string): Promise<PagoCobro[]> {
+    return api.get(`/api/cobros/${cobroId}/pagos`)
+  }
+
+  return { listar, obtener, registrarAbono, marcarFactura, generarCobros, pagosDe }
 }

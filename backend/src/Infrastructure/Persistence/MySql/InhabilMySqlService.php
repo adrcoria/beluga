@@ -9,13 +9,9 @@ use PDO;
 
 class InhabilMySqlService implements InhabilService
 {
-    // Días de semana MySQL (1=Dom,2=Lun…7=Sáb) → nuestra clave
-    private const MYSQL_DIA_MAP = [2 => 'L', 3 => 'M', 4 => 'X', 5 => 'J', 6 => 'V', 7 => 'S'];
-
     public function __construct(private readonly PDO $pdo) {}
 
     // ── Declarar (preview o aplicar) ──────────────────────────────────────
-
     public function declarar(
         string  $fecha,
         string  $motivo,
@@ -23,81 +19,81 @@ class InhabilMySqlService implements InhabilService
         string  $usuarioId,
         bool    $soloPreview = false
     ): array {
-        // Asignaciones afectadas ese día
-        $afectadas = $this->obtenerAsignacionesEnFecha($fecha, $sucursalId);
-        $total     = count($afectadas);
+        // Clases (alumno+clase) afectadas ese día según el patrón recurrente vigente
+        $afectadas = $this->clasesAfectadas($fecha, $sucursalId);
+
+        // Alumnos distintos (para el conteo de cabecera)
+        $foliosUnicos = array_values(array_unique(array_column($afectadas, 'folio')));
 
         if ($soloPreview) {
             return [
                 'fecha'            => $fecha,
-                'alumnosAfectados' => $total,
+                'alumnosAfectados' => count($foliosUnicos),
+                'clasesAfectadas'  => count($afectadas),
                 'detalleAlumnos'   => array_map(fn($a) => [
-                    'folio'  => $a['alumno_folio'],
-                    'nombre' => $a['alumno_nombre'],
-                    'slot'   => $a['slot_id'],
+                    'folio'      => $a['folio'],
+                    'nombre'     => $a['nombre'],
+                    'hora'       => $a['hora'],
+                    'instructor' => $a['instructor'],
                 ], $afectadas),
             ];
         }
 
-        // Aplicar: crear inhábil y generar reposiciones
+        // Aplicar: registrar inhábil + generar un comodín por cada clase perdida
         $inhabilId = $this->uuid();
-        $this->pdo->prepare(
-            'INSERT INTO inhabiles (id, fecha, motivo, sucursal_id, declarado_por)
-             VALUES (:id, :fecha, :motivo, :suc, :usr)'
-        )->execute([
-            ':id'    => $inhabilId,
-            ':fecha' => $fecha,
-            ':motivo'=> $motivo,
-            ':suc'   => $sucursalId,
-            ':usr'   => $usuarioId,
-        ]);
+        $vence     = date('Y-m-d', strtotime('+' . $this->diasVigencia() . ' days'));
 
-        $generadas = 0;
-        $pendientes = 0;
+        $this->pdo->beginTransaction();
+        try {
+            $this->pdo->prepare(
+                'INSERT INTO inhabiles (id, fecha, motivo, sucursal_id, declarado_por)
+                 VALUES (:id, :fecha, :motivo, :suc, :usr)'
+            )->execute([
+                ':id'     => $inhabilId,
+                ':fecha'  => $fecha,
+                ':motivo' => $motivo,
+                ':suc'    => $sucursalId,
+                ':usr'    => $usuarioId,
+            ]);
 
-        foreach ($afectadas as $asig) {
-            $repoSlot = $this->buscarSlotReposicion(
-                alumnoFolio: $asig['alumno_folio'],
-                modalidad:   $asig['alumno_modalidad'],
-                dispDias:    json_decode($asig['disp_dias'], true),
-                horaInicio:  $asig['disp_hora_inicio'],
-                horaFin:     $asig['disp_hora_fin'],
-                desdeFecha:  $fecha,
-                excluirSlot: $asig['slot_id']
+            $insRep = $this->pdo->prepare(
+                'INSERT INTO reposiciones
+                    (id, alumno_folio, sucursal_id, motivo, origen, generada_por_inhabil_id, estado, vence)
+                 VALUES (:id, :folio, :suc, :motivo, \'inhabil\', :inhabil, \'pendiente\', :vence)'
             );
 
-            if ($repoSlot) {
-                $this->pdo->prepare(
-                    'INSERT INTO asignaciones (id, alumno_folio, slot_id, fecha, estado, generada_por_inhabil_id)
-                     VALUES (UUID(), :folio, :slot, :fecha, "reposicion", :inhabil)'
-                )->execute([
-                    ':folio'   => $asig['alumno_folio'],
-                    ':slot'    => $repoSlot['id'],
-                    ':fecha'   => $repoSlot['fecha_repo'],
+            $generadas = 0;
+            foreach ($afectadas as $a) {
+                $insRep->execute([
+                    ':id'      => $this->uuid(),
+                    ':folio'   => $a['folio'],
+                    ':suc'     => $a['sucursal_id'],
+                    ':motivo'  => 'Día inhábil ' . $fecha . ($motivo ? ' — ' . $motivo : ''),
                     ':inhabil' => $inhabilId,
+                    ':vence'   => $vence,
                 ]);
                 $generadas++;
-            } else {
-                $pendientes++;
             }
-        }
 
-        // Actualizar contadores en el registro inhábil
-        $this->pdo->prepare(
-            'UPDATE inhabiles SET estado = "aplicado", alumnos_afectados = :af, reposiciones_generadas = :rg WHERE id = :id'
-        )->execute([':af' => $total, ':rg' => $generadas, ':id' => $inhabilId]);
+            $this->pdo->prepare(
+                'UPDATE inhabiles SET estado = \'aplicado\', alumnos_afectados = :af, reposiciones_generadas = :rg WHERE id = :id'
+            )->execute([':af' => count($foliosUnicos), ':rg' => $generadas, ':id' => $inhabilId]);
+
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
 
         return [
             'inhabilId'             => $inhabilId,
             'fecha'                 => $fecha,
-            'alumnosAfectados'      => $total,
+            'alumnosAfectados'      => count($foliosUnicos),
             'reposicionesGeneradas' => $generadas,
-            'pendientesDeAsignar'   => $pendientes,
         ];
     }
 
     // ── Listar inhábiles ──────────────────────────────────────────────────
-
     public function listar(): array
     {
         $stmt = $this->pdo->query(
@@ -122,92 +118,82 @@ class InhabilMySqlService implements InhabilService
 
     // ── Helpers privados ──────────────────────────────────────────────────
 
-    private function obtenerAsignacionesEnFecha(string $fecha, ?string $sucursalId): array
+    /**
+     * Clases afectadas en una fecha: reglas recurrentes vigentes ese día.
+     * Para GRUPAL expande a cada miembro del grupo (cada quien pierde su clase).
+     * Devuelve una entrada por (alumno × clase perdida).
+     */
+    private function clasesAfectadas(string $fecha, ?string $sucursalId): array
     {
-        $sql = 'SELECT a.id, a.alumno_folio, a.slot_id, a.estado,
-                       al.nombre AS alumno_nombre, al.modalidad AS alumno_modalidad,
-                       al.disp_dias, al.disp_hora_inicio, al.disp_hora_fin
-                FROM asignaciones a
-                JOIN alumnos al ON al.folio = a.alumno_folio
-                JOIN slots s    ON s.id = a.slot_id
-                WHERE a.fecha = :fecha';
+        $dia = $this->diaDeFecha($fecha);
 
-        $params = [':fecha' => $fecha];
-
+        $sql = "SELECT hr.alumno_folio, hr.grupo_id, hr.sucursal_id,
+                       hr.hora_inicio, i.nombre AS instructor_nombre,
+                       al.nombre AS alumno_nombre
+                FROM horario_recurrente hr
+                JOIN instructores i ON i.id = hr.instructor_id
+                LEFT JOIN alumnos al ON al.folio = hr.alumno_folio
+                WHERE hr.dia = :dia
+                  AND hr.vigente_desde <= :f1
+                  AND (hr.vigente_hasta IS NULL OR hr.vigente_hasta >= :f2)";
+        $params = [':dia' => $dia, ':f1' => $fecha, ':f2' => $fecha];
         if ($sucursalId) {
-            $sql .= ' AND s.sucursal_id = :suc';
+            $sql .= ' AND hr.sucursal_id = :suc';
             $params[':suc'] = $sucursalId;
         }
+        $sql .= ' ORDER BY hr.hora_inicio';
 
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
-        return $stmt->fetchAll();
-    }
 
-    /**
-     * Busca el primer slot compatible en los próximos 14 días.
-     * Respeta: modalidad, días disponibles del alumno, rango horario y cupo.
-     */
-    private function buscarSlotReposicion(
-        string  $alumnoFolio,
-        string  $modalidad,
-        array   $dispDias,
-        ?string $horaInicio,
-        ?string $horaFin,
-        string  $desdeFecha,
-        string  $excluirSlot
-    ): ?array {
-        if (empty($dispDias)) return null;
-
-        $inicio = new \DateTimeImmutable($desdeFecha);
-        $fin    = $inicio->modify('+14 days');
-
-        for ($d = $inicio->modify('+1 day'); $d <= $fin; $d = $d->modify('+1 day')) {
-            $diaSemana = self::MYSQL_DIA_MAP[(int) $d->format('N') + 1] ?? null;
-            if (!$diaSemana || !in_array($diaSemana, $dispDias, true)) continue;
-
-            $fechaStr = $d->format('Y-m-d');
-
-            // Slots compatibles con cupo disponible ese día
-            $sql = 'SELECT s.*,
-                           (s.cupo_max - IFNULL((
-                               SELECT COUNT(*) FROM asignaciones sub
-                               WHERE sub.slot_id = s.id AND sub.fecha = :fecha
-                           ),0)) AS cupo_disponible
-                    FROM slots s
-                    WHERE s.modalidad = :modalidad
-                      AND s.dia       = :dia
-                      AND s.id       != :excluir
-                      AND s.activo    = 1';
-
-            $params = [':fecha' => $fechaStr, ':modalidad' => $modalidad, ':dia' => $diaSemana, ':excluir' => $excluirSlot];
-
-            if ($horaInicio) { $sql .= ' AND s.hora_inicio >= :hi'; $params[':hi'] = $horaInicio; }
-            if ($horaFin)    { $sql .= ' AND s.hora_inicio < :hf';  $params[':hf'] = $horaFin; }
-
-            $sql .= ' HAVING cupo_disponible > 0 ORDER BY s.hora_inicio LIMIT 1';
-
-            $stmt = $this->pdo->prepare($sql);
-            $stmt->execute($params);
-            $slot = $stmt->fetch();
-
-            if ($slot) {
-                $slot['fecha_repo'] = $fechaStr;
-                return $slot;
+        $out = [];
+        foreach ($stmt->fetchAll() as $r) {
+            if ($r['grupo_id']) {
+                // GRUPAL: cada miembro pierde la clase
+                $mStmt = $this->pdo->prepare(
+                    'SELECT ga.alumno_folio, a.nombre FROM grupo_alumnos ga
+                     JOIN alumnos a ON a.folio = ga.alumno_folio WHERE ga.grupo_id = ?'
+                );
+                $mStmt->execute([$r['grupo_id']]);
+                foreach ($mStmt->fetchAll() as $m) {
+                    $out[] = [
+                        'folio'       => $m['alumno_folio'],
+                        'nombre'      => $m['nombre'],
+                        'hora'        => substr((string) $r['hora_inicio'], 0, 5),
+                        'instructor'  => $r['instructor_nombre'],
+                        'sucursal_id' => $r['sucursal_id'],
+                    ];
+                }
+            } elseif ($r['alumno_folio']) {
+                $out[] = [
+                    'folio'       => $r['alumno_folio'],
+                    'nombre'      => $r['alumno_nombre'],
+                    'hora'        => substr((string) $r['hora_inicio'], 0, 5),
+                    'instructor'  => $r['instructor_nombre'],
+                    'sucursal_id' => $r['sucursal_id'],
+                ];
             }
         }
+        return $out;
+    }
 
-        return null;
+    private function diasVigencia(): int
+    {
+        $v = $this->pdo->query("SELECT valor FROM configuracion WHERE clave = 'reposicion_dias_vigencia'")->fetchColumn();
+        return $v !== false ? (int) $v : 30;
+    }
+
+    private function diaDeFecha(string $fecha): string
+    {
+        $n = (int) date('N', strtotime($fecha)); // 1=Lun … 7=Dom
+        return ['L', 'M', 'X', 'J', 'V', 'S', 'D'][$n - 1] ?? 'L';
     }
 
     private function uuid(): string
     {
-        return sprintf('%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
-            mt_rand(0, 0xffff), mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0x0fff) | 0x4000,
-            mt_rand(0, 0x3fff) | 0x8000,
-            mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
-        );
+        $data    = random_bytes(16);
+        $data[6] = chr(ord($data[6]) & 0x0f | 0x40);
+        $data[8] = chr(ord($data[8]) & 0x3f | 0x80);
+        return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
     }
 }

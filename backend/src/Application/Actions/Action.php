@@ -27,6 +27,11 @@ abstract class Action
 
     abstract protected function action(): Response;
 
+    protected function resolveArg(string $name): mixed
+    {
+        return $this->args[$name] ?? null;
+    }
+
     protected function getBody(): array
     {
         return (array) ($this->request->getParsedBody() ?? []);

@@ -19,8 +19,10 @@ class AlumnoMySqlRepository implements AlumnoRepository
         $params = [];
 
         if (!empty($filtros['busqueda'])) {
-            $where[]    = '(a.nombre LIKE :q OR a.folio LIKE :q OR a.telefono LIKE :q OR a.tutor LIKE :q)';
-            $params[':q'] = '%' . $filtros['busqueda'] . '%';
+            $where[]       = '(a.nombre LIKE :q1 OR a.folio LIKE :q2)';
+            $q             = '%' . $filtros['busqueda'] . '%';
+            $params[':q1'] = $q;
+            $params[':q2'] = $q;
         }
         if (!empty($filtros['modalidad'])) {
             $where[]             = 'a.modalidad = :modalidad';
@@ -143,6 +145,13 @@ class AlumnoMySqlRepository implements AlumnoRepository
             'status'         => 'status',
         ];
 
+        if (array_key_exists('fechaInicio', $datos)) {
+            $set[] = 'fecha_inicio = :fecha_inicio';
+            $params[':fecha_inicio'] = $datos['fechaInicio'];
+            $set[] = 'dia_pago = :dia_pago';
+            $params[':dia_pago'] = (int) date('j', strtotime($datos['fechaInicio']));
+        }
+
         foreach ($mapa as $campo => $col) {
             if (array_key_exists($campo, $datos)) {
                 $set[]              = "$col = :$col";
@@ -183,6 +192,13 @@ class AlumnoMySqlRepository implements AlumnoRepository
         $this->pdo->prepare('UPDATE alumnos SET ' . implode(', ', $set) . ' WHERE folio = :folio')->execute($params);
 
         return $this->porFolio($folio);
+    }
+
+    // ── Eliminar ──────────────────────────────────────────────────────────
+
+    public function eliminar(string $folio): void
+    {
+        $this->pdo->prepare('DELETE FROM alumnos WHERE folio = ?')->execute([$folio]);
     }
 
     // ── Helpers privados ──────────────────────────────────────────────────
@@ -244,7 +260,7 @@ class AlumnoMySqlRepository implements AlumnoRepository
             // Campos calculados de UI
             'tocaPago'         => $this->calcularTocaPago($row['vencimiento']),
             'diasMora'         => $this->calcularDiasMora($row['vencimiento']),
-            'montoConDescuento'=> $this->calcularMontoConDescuento((float)$row['mensualidad'], $row['descuento_pct']),
+            'montoConDescuento'=> $this->calcularMontoConDescuento((float)$row['mensualidad']),
         ];
     }
 
@@ -266,9 +282,8 @@ class AlumnoMySqlRepository implements AlumnoRepository
         return $diff < 0 ? abs($diff) : 0;
     }
 
-    private function calcularMontoConDescuento(float $mensualidad, ?string $pct): float
+    private function calcularMontoConDescuento(float $mensualidad): float
     {
-        if ($pct === null) return $mensualidad;
-        return round($mensualidad * (1 - (float)$pct / 100), 2);
+        return $mensualidad;
     }
 }

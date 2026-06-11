@@ -2,10 +2,12 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useUiStore } from '@/stores/ui'
 
 const route  = useRoute()
 const router = useRouter()
 const auth   = useAuthStore()
+const ui     = useUiStore()
 
 const secciones = [
   {
@@ -15,10 +17,10 @@ const secciones = [
     ],
   },
   {
-    id: 'operacion', label: 'Operación', oculto: true,
+    id: 'operacion', label: 'Operación',
     items: [
       { name: 'calendario',   path: '/calendario',   label: 'Calendario Inteligente', icon: 'mdi-calendar-month-outline' },
-      { name: 'asistencia',   path: '/asistencia',   label: 'Control de Asistencia',  icon: 'mdi-clipboard-check-outline' },
+      { name: 'asistencia',   path: '/asistencia',   label: 'Control de Asistencia',  icon: 'mdi-clipboard-check-outline', oculto: true },
       { name: 'reposiciones', path: '/reposiciones', label: 'Reposiciones',            icon: 'mdi-refresh' },
     ],
   },
@@ -26,7 +28,7 @@ const secciones = [
     id: 'personas', label: 'Personas',
     items: [
       { name: 'alumnos',      path: '/alumnos',      label: 'Alumnos',      icon: 'mdi-account-group-outline' },
-      { name: 'instructores', path: '/instructores', label: 'Instructores', icon: 'mdi-account-tie-outline', oculto: true },
+      { name: 'instructores', path: '/instructores', label: 'Instructores', icon: 'mdi-account-tie-outline' },
     ],
   },
   {
@@ -53,7 +55,8 @@ const secciones = [
         label: 'Catálogos',
         icon: 'mdi-book-open-variant-outline',
         items: [
-          { name: 'catalogos', path: '/config/catalogos', label: 'Planes de pago', icon: 'mdi-currency-usd' },
+          { name: 'catalogos',  path: '/config/catalogos',  label: 'Planes de pago', icon: 'mdi-currency-usd' },
+          { name: 'horarios',   path: '/config/horarios',   label: 'Horarios',        icon: 'mdi-clock-time-four-outline' },
         ],
       },
     ],
@@ -78,7 +81,7 @@ function cerrarSesion() {
 </script>
 
 <template>
-  <v-navigation-drawer permanent width="252" color="#0e3b33">
+  <v-navigation-drawer permanent width="252" color="#0e3b33" :rail="ui.sidebarColapsado" rail-width="72" expand-on-hover>
     <!-- Logo -->
     <div class="px-4 pt-5 pb-4" style="border-bottom:1px solid rgba(255,255,255,0.08)">
       <div class="d-flex align-center gap-3">

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { VForm } from 'vuetify/components'
 import { useCobranza, type Cobro, METODOS_PAGO } from '@/composables/useCobranza'
+import { type PagoCobro } from '@/composables/useCobranza'
 import { useSwal } from '@/composables/useSwal'
 import { useSucursalStore } from '@/stores/sucursal'
 
@@ -14,17 +15,23 @@ const cobros    = ref<Cobro[]>([])
 const cargando  = ref(false)
 const busqueda  = ref('')
 const filtroEst = ref<'todos' | 'pendiente' | 'parcial' | 'pagado'>('pendiente')
+const soloFacturaPendiente = ref(false)
+
+// ── Paginación ───────────────────────────────────────────────────────────────
+const paginaActual = ref(1)
+const porPagina    = ref(10)
+const opcionesPorPagina = [10, 20, 50, 100]
 
 // ── Modal pago ─────────────────────────────────────────────────────────────
 const modalPago   = ref(false)
 const cobroSel    = ref<Cobro | null>(null)
 const guardando   = ref(false)
 const pagoFormRef = ref<InstanceType<typeof VForm>>()
-const formPago    = ref({ monto: 0, metodo: 'efectivo' })
+const formPago    = ref({ monto: 0, metodo: 'efectivo', requiereFactura: false })
 
 // ── Modal ticket ───────────────────────────────────────────────────────────
 const modalTicket = ref(false)
-const ticketData  = ref<{ cobro: Cobro; montoAbono: number; metodo: string } | null>(null)
+const ticketData  = ref<{ cobro: Cobro; montoAbono: number; metodo: string; ticket: string | null; fecha: string } | null>(null)
 
 // ── Carga ──────────────────────────────────────────────────────────────────
 async function cargar() {
@@ -41,6 +48,7 @@ onMounted(cargar)
 const cobrosFiltrados = computed(() => {
   let r = cobros.value
   if (filtroEst.value !== 'todos') r = r.filter(c => c.estado === filtroEst.value)
+  if (soloFacturaPendiente.value) r = r.filter(c => c.requiereFactura && !c.facturaRealizada)
   if (busqueda.value.trim()) {
     const q = busqueda.value.toLowerCase()
     r = r.filter(c => c.alumnoNombre.toLowerCase().includes(q) || c.alumnoFolio.includes(q))
@@ -48,12 +56,37 @@ const cobrosFiltrados = computed(() => {
   return r
 })
 
+// ── Paginación (sobre la lista ya filtrada) ──────────────────────────────────
+const totalPaginas = computed(() => Math.max(1, Math.ceil(cobrosFiltrados.value.length / porPagina.value)))
+
+const cobrosPagina = computed(() => {
+  const start = (paginaActual.value - 1) * porPagina.value
+  return cobrosFiltrados.value.slice(start, start + porPagina.value)
+})
+
+const rangoTexto = computed(() => {
+  const total = cobrosFiltrados.value.length
+  if (!total) return '0'
+  const ini = (paginaActual.value - 1) * porPagina.value + 1
+  const fin = Math.min(paginaActual.value * porPagina.value, total)
+  return `${ini}–${fin} de ${total}`
+})
+
+// Al cambiar filtros, búsqueda o tamaño de página, volver a la primera
+watch([busqueda, filtroEst, porPagina, soloFacturaPendiente], () => { paginaActual.value = 1 })
+// Si la página actual queda fuera de rango, ajustarla
+watch(totalPaginas, (t) => { if (paginaActual.value > t) paginaActual.value = t })
+
 // ── Stats ──────────────────────────────────────────────────────────────────
 const stats = computed(() => ({
   pendiente: cobros.value.filter(c => c.estado === 'pendiente'),
   parcial:   cobros.value.filter(c => c.estado === 'parcial'),
   pagado:    cobros.value.filter(c => c.estado === 'pagado'),
 }))
+
+const totalFacturasPendientes = computed(() =>
+  cobros.value.filter(c => c.requiereFactura && !c.facturaRealizada).length
+)
 
 const totalPendiente = computed(() =>
   stats.value.pendiente.reduce((s, c) => s + (c.montoNeto - c.montoPagado), 0) +
@@ -64,7 +97,7 @@ const totalPendiente = computed(() =>
 function abrirCobrar(cobro: Cobro) {
   cobroSel.value = cobro
   const pendiente = Math.max(0, cobro.montoNeto - cobro.montoPagado)
-  formPago.value  = { monto: pendiente, metodo: 'efectivo' }
+  formPago.value  = { monto: pendiente, metodo: 'efectivo', requiereFactura: cobro.requiereFactura }
   modalPago.value = true
 }
 
@@ -75,11 +108,18 @@ async function registrarAbono() {
   guardando.value = true
   try {
     const cobro = await cobranzaApi.registrarAbono(cobroSel.value.id, {
-      monto:      formPago.value.monto,
-      metodo:     formPago.value.metodo,
-      sucursalId: sucursalStore.sucursalActivaId,
+      monto:           formPago.value.monto,
+      metodo:          formPago.value.metodo,
+      sucursalId:      sucursalStore.sucursalActivaId,
+      requiereFactura: formPago.value.requiereFactura,
     })
-    ticketData.value = { cobro, montoAbono: formPago.value.monto, metodo: formPago.value.metodo }
+    ticketData.value = {
+      cobro,
+      montoAbono: formPago.value.monto,
+      metodo:     formPago.value.metodo,
+      ticket:     (cobro as any).ticket ?? null,
+      fecha:      new Date().toISOString().slice(0, 10),
+    }
     modalPago.value  = false
     modalTicket.value = true
     exito('Abono registrado', cobro.estado === 'pagado' ? 'Cobro liquidado' : 'Pago parcial registrado')
@@ -88,6 +128,43 @@ async function registrarAbono() {
     notifError('Error', e.message)
   } finally {
     guardando.value = false
+  }
+}
+
+// ── Facturación ──────────────────────────────────────────────────────────────
+async function toggleFactura(c: Cobro) {
+  try {
+    const upd = await cobranzaApi.marcarFactura(c.id, { facturaRealizada: !c.facturaRealizada })
+    const idx = cobros.value.findIndex(x => x.id === c.id)
+    if (idx >= 0) cobros.value[idx] = upd
+    exito(upd.facturaRealizada ? 'Factura marcada como realizada' : 'Factura marcada como pendiente')
+  } catch (e: any) { notifError('Error', e.message) }
+}
+
+async function toggleRequiereFactura(c: Cobro) {
+  try {
+    const upd = await cobranzaApi.marcarFactura(c.id, { requiereFactura: !c.requiereFactura })
+    const idx = cobros.value.findIndex(x => x.id === c.id)
+    if (idx >= 0) cobros.value[idx] = upd
+  } catch (e: any) { notifError('Error', e.message) }
+}
+
+// ── Ver / reenviar recibo de un pago ya registrado ──────────────────────────
+async function verRecibo(cobro: Cobro) {
+  try {
+    const pagos = await cobranzaApi.pagosDe(cobro.id)
+    if (!pagos.length) { notifError('Sin recibos', 'Este cobro no tiene pagos registrados.'); return }
+    const p: PagoCobro = pagos[0]   // el más reciente
+    ticketData.value = {
+      cobro,
+      montoAbono: p.monto,
+      metodo:     p.metodo,
+      ticket:     p.ticket,
+      fecha:      p.fecha,
+    }
+    modalTicket.value = true
+  } catch (e: any) {
+    notifError('Error', e.message)
   }
 }
 
@@ -103,7 +180,7 @@ const fmtPeriodo = (desde: string, hasta: string) => {
 }
 
 const fmtFecha = (f: string) =>
-  new Date(f).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
+  new Date(f.length === 10 ? f + 'T12:00:00' : f).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })
 
 function estadoColor(e: string) {
   return e === 'pagado' ? 'success' : e === 'parcial' ? 'warning' : 'error'
@@ -120,8 +197,8 @@ function textoTicket(d: typeof ticketData.value): string {
     ``,
     `Alumno: ${d.cobro.alumnoNombre}`,
     `Folio:  #${d.cobro.alumnoFolio}`,
-    `Ticket: ${d.cobro.ticket ?? '—'}`,
-    `Fecha:  ${fmtFecha(new Date().toISOString())}`,
+    `Recibo: ${d.ticket ?? '—'}`,
+    `Fecha:  ${fmtFecha(d.fecha)}`,
     ``,
     `Concepto: ${concepto}`,
     `Periodo:  ${periodo}`,
@@ -243,6 +320,20 @@ const excedente = computed(() =>
               @click="filtroEst = f.val as any"
             >{{ f.label }}</v-chip>
           </div>
+
+          <v-chip
+            :color="soloFacturaPendiente ? 'warning' : undefined"
+            :variant="soloFacturaPendiente ? 'flat' : 'outlined'"
+            size="small" style="cursor:pointer"
+            prepend-icon="mdi-file-clock-outline"
+            @click="soloFacturaPendiente = !soloFacturaPendiente"
+          >
+            Facturas pendientes
+            <v-chip v-if="totalFacturasPendientes" size="x-small" class="ml-1" color="warning" variant="flat">
+              {{ totalFacturasPendientes }}
+            </v-chip>
+          </v-chip>
+
           <v-spacer />
           <span style="font-size:12px;color:#9ca3af">{{ cobrosFiltrados.length }} cobro{{ cobrosFiltrados.length !== 1 ? 's' : '' }}</span>
         </div>
@@ -262,21 +353,22 @@ const excedente = computed(() =>
             <th class="col-header">Pagado</th>
             <th class="col-header">Pendiente</th>
             <th class="col-header">Estado</th>
+            <th class="col-header">Factura</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
           <tr v-if="cargando">
-            <td colspan="9" class="text-center py-12">
+            <td colspan="10" class="text-center py-12">
               <v-progress-circular indeterminate color="primary" size="32" />
             </td>
           </tr>
           <tr v-else-if="!cobrosFiltrados.length">
-            <td colspan="9" class="text-center py-12 text-medium-emphasis" style="font-size:14px">
+            <td colspan="10" class="text-center py-12 text-medium-emphasis" style="font-size:14px">
               Sin cobros{{ filtroEst !== 'todos' ? ' ' + filtroEst + 's' : '' }}
             </td>
           </tr>
-          <tr v-for="c in cobrosFiltrados" :key="c.id">
+          <tr v-for="c in cobrosPagina" :key="c.id">
             <td>
               <div class="d-flex align-center ga-2">
                 <span style="font-weight:600;color:#0a1e6e;font-size:13px">{{ c.alumnoNombre }}</span>
@@ -318,17 +410,67 @@ const excedente = computed(() =>
               </v-chip>
             </td>
             <td>
-              <v-btn
-                v-if="c.estado !== 'pagado'"
-                size="small"
-                rounded="lg"
-                style="background:#2fe6b0;color:#0a1e6e;font-weight:700"
-                @click.stop="abrirCobrar(c)"
-              >Cobrar</v-btn>
+              <v-chip
+                v-if="c.requiereFactura"
+                size="small" variant="tonal" label
+                :color="c.facturaRealizada ? 'success' : 'warning'"
+                style="cursor:pointer" title="Clic para cambiar"
+                @click.stop="toggleFactura(c)"
+              >
+                <v-icon start :icon="c.facturaRealizada ? 'mdi-file-check-outline' : 'mdi-file-clock-outline'" size="14" />
+                {{ c.facturaRealizada ? 'Facturada' : 'Pendiente' }}
+              </v-chip>
+              <span
+                v-else
+                style="font-size:11px;color:#cbd5e1;cursor:pointer"
+                title="Marcar que requiere factura"
+                @click.stop="toggleRequiereFactura(c)"
+              >No req.</span>
+            </td>
+            <td>
+              <div class="d-flex align-center justify-end ga-1">
+                <v-btn
+                  v-if="c.montoPagado > 0"
+                  icon="mdi-receipt-text-outline" size="small" variant="text" color="primary"
+                  title="Ver / reenviar recibo"
+                  @click.stop="verRecibo(c)"
+                />
+                <v-btn
+                  v-if="c.estado !== 'pagado'"
+                  size="small"
+                  rounded="lg"
+                  style="background:#2fe6b0;color:#0a1e6e;font-weight:700"
+                  @click.stop="abrirCobrar(c)"
+                >Cobrar</v-btn>
+              </div>
             </td>
           </tr>
         </tbody>
       </v-table>
+
+      <!-- Pie de paginación -->
+      <div v-if="!cargando && cobrosFiltrados.length"
+        class="d-flex flex-wrap align-center justify-space-between ga-3 pa-3"
+        style="border-top:1px solid #f1f5f9">
+        <div class="d-flex align-center ga-2">
+          <span style="font-size:12px;color:#6b7280">Por página</span>
+          <v-select
+            v-model="porPagina"
+            :items="opcionesPorPagina"
+            density="compact" variant="outlined" rounded="lg" hide-details
+            style="max-width:100px"
+          />
+        </div>
+        <span style="font-size:12px;color:#9ca3af">{{ rangoTexto }}</span>
+        <v-pagination
+          v-model="paginaActual"
+          :length="totalPaginas"
+          :total-visible="5"
+          density="compact"
+          rounded="lg"
+          active-color="primary"
+        />
+      </div>
     </v-card>
 
     <!-- ── Modal: Registrar abono ──────────────────────────────────────────── -->
@@ -414,6 +556,14 @@ const excedente = computed(() =>
                   >{{ m.label }}</v-chip>
                 </div>
               </v-col>
+
+              <v-col cols="12" class="mt-1">
+                <v-checkbox
+                  v-model="formPago.requiereFactura"
+                  label="Requiere factura"
+                  density="compact" color="primary" hide-details
+                />
+              </v-col>
             </v-row>
           </v-card-text>
         </v-form>
@@ -455,12 +605,12 @@ const excedente = computed(() =>
           <div class="ticket-divider" />
 
           <div class="ticket-row">
-            <span>Ticket</span>
-            <span style="font-family:monospace;font-weight:700;color:#1a3fe8">{{ ticketData.cobro.ticket ?? '—' }}</span>
+            <span>Recibo</span>
+            <span style="font-family:monospace;font-weight:700;color:#1a3fe8">{{ ticketData.ticket ?? '—' }}</span>
           </div>
           <div class="ticket-row">
             <span>Fecha</span>
-            <span>{{ fmtFecha(new Date().toISOString()) }}</span>
+            <span>{{ fmtFecha(ticketData.fecha) }}</span>
           </div>
           <div class="ticket-divider" />
 

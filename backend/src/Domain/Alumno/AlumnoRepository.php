@@ -10,4 +10,5 @@ interface AlumnoRepository
     public function porFolio(string $folio): ?array;
     public function crear(array $datos): array;
     public function actualizar(string $folio, array $datos): ?array;
+    public function eliminar(string $folio): void;
 }

@@ -97,6 +97,12 @@ const router = createRouter({
           component: () => import('@/views/config/CatalogosView.vue'),
           meta: { titulo: 'Catálogos', seccion: 'config' },
         },
+        {
+          path: 'config/horarios',
+          name: 'horarios',
+          component: () => import('@/views/config/HorariosView.vue'),
+          meta: { titulo: 'Gestión de Horarios', seccion: 'config' },
+        },
 
         // ── Premium ───────────────────────────────────────────────────────
         {

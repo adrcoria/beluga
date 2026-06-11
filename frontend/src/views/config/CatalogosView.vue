@@ -1,33 +1,40 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useAlumnos, type PlanCatalogo } from '@/composables/useAlumnos'
+import { useModalidades, type Modalidad } from '@/composables/useModalidades'
 import { useSwal } from '@/composables/useSwal'
 
 const alumnos = useAlumnos()
+const modApi  = useModalidades()
 const { exito, error: notifError, confirmar } = useSwal()
 
 // ── Estado ────────────────────────────────────────────────────────────────
-const planes   = ref<PlanCatalogo[]>([])
-const cargando = ref(true)
+const planes      = ref<PlanCatalogo[]>([])
+const modalidades = ref<Modalidad[]>([])
+const cargando    = ref(true)
 
 // ── Modal ─────────────────────────────────────────────────────────────────
-const dialog    = ref(false)
-const guardando = ref(false)
+const dialog     = ref(false)
+const guardando  = ref(false)
 const editandoId = ref<string | null>(null)
 
-const formVacio = () => ({ label: '', modalidad: 'PART' as PlanCatalogo['modalidad'], clasesSemana: 1, mensualidad: 0 })
-const form = ref(formVacio())
+const formVacio = () => ({ label: '', modalidad: '', clasesSemana: 1, mensualidad: 0 })
+const form    = ref(formVacio())
 const formRef = ref()
 
-const MODALIDADES = ['PART', 'GRUPAL', 'MATRO'] as const
 const colorMod: Record<string, string> = { PART: '#dbeafe', GRUPAL: '#fce7f3', MATRO: '#fed7aa' }
 const textMod:  Record<string, string> = { PART: '#1e3a8a', GRUPAL: '#9d174d', MATRO: '#9a3412' }
 
 // ── Carga ─────────────────────────────────────────────────────────────────
 async function cargar() {
   cargando.value = true
-  try { planes.value = await alumnos.listarPlanes() }
-  finally { cargando.value = false }
+  try {
+    const [p, m] = await Promise.all([alumnos.listarPlanes(), modApi.listar()])
+    planes.value      = p
+    modalidades.value = m
+  } finally {
+    cargando.value = false
+  }
 }
 onMounted(cargar)
 
@@ -38,7 +45,7 @@ function planesPorModalidad(mod: string) {
 }
 
 // ── Abrir modal ───────────────────────────────────────────────────────────
-function abrirNuevo(modalidad: PlanCatalogo['modalidad']) {
+function abrirNuevo(modalidad: string) {
   editandoId.value = null
   form.value = { ...formVacio(), modalidad }
   dialog.value = true
@@ -106,22 +113,23 @@ const fmt = (n: number) =>
       </div>
 
       <div v-else class="pa-6 d-flex flex-column ga-6">
-        <div v-for="mod in MODALIDADES" :key="mod">
+        <div v-for="mod in modalidades" :key="mod.clave">
           <!-- Cabecera modalidad -->
           <div class="d-flex align-center ga-3 mb-3">
             <v-chip size="small" label variant="flat"
-              :style="{ background: colorMod[mod], color: textMod[mod], fontWeight: '700' }"
-            >{{ mod }}</v-chip>
+              :style="{ background: colorMod[mod.clave] ?? '#e5e7eb', color: textMod[mod.clave] ?? '#374151', fontWeight: '700' }"
+            >{{ mod.clave }}</v-chip>
+            <span style="font-size:12px;color:#9ca3af">{{ mod.label }}</span>
             <div style="height:1px;flex:1;background:#e5e7eb" />
             <v-btn
               size="x-small" variant="tonal" color="primary" rounded="lg"
               prepend-icon="mdi-plus"
-              @click="abrirNuevo(mod)"
+              @click="abrirNuevo(mod.clave)"
             >Nuevo servicio</v-btn>
           </div>
 
           <!-- Tabla -->
-          <v-table density="compact" hover v-if="planesPorModalidad(mod).length">
+          <v-table density="compact" hover v-if="planesPorModalidad(mod.clave).length">
             <thead>
               <tr>
                 <th style="color:#9ca3af;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em">Nombre del servicio</th>
@@ -131,7 +139,7 @@ const fmt = (n: number) =>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="plan in planesPorModalidad(mod)" :key="plan.id">
+              <tr v-for="plan in planesPorModalidad(mod.clave)" :key="plan.id">
                 <td style="font-weight:600;color:#0a1e6e;font-size:14px">{{ plan.label }}</td>
                 <td>
                   <v-chip size="x-small" variant="tonal" color="primary" label>
@@ -189,7 +197,7 @@ const fmt = (n: number) =>
                 <v-select
                   v-model="form.modalidad"
                   label="Modalidad *"
-                  :items="MODALIDADES"
+                  :items="modalidades.map(m => ({ title: m.clave, value: m.clave }))"
                   variant="outlined" density="compact" rounded="lg"
                   :rules="[v => !!v || 'Requerido']"
                   :disabled="!!editandoId"
