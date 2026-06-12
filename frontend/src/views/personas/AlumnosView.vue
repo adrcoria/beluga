@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { VForm } from 'vuetify/components'
+import QRCode from 'qrcode'
 import * as XLSX from 'xlsx'
 import { useAlumnos, planesAMapa, type AlumnoResumen, type PlanCatalogo } from '@/composables/useAlumnos'
 import { useModalidades, type Modalidad } from '@/composables/useModalidades'
@@ -254,6 +255,31 @@ function abrirEditar(a: AlumnoResumen) {
   }
   errorEdit.value = ''
   modalEditar.value = true
+}
+
+// ── QR del alumno ───────────────────────────────────────────────────────────
+const modalQr   = ref(false)
+const qrAlumno  = ref<AlumnoResumen | null>(null)
+const qrDataUrl = ref('')
+
+const qrLink = computed(() => {
+  if (!qrAlumno.value) return ''
+  return `${window.location.origin}${import.meta.env.BASE_URL}qr/${qrAlumno.value.folio}`
+})
+
+async function abrirQr(a: AlumnoResumen) {
+  qrAlumno.value = a
+  qrDataUrl.value = await QRCode.toDataURL(a.folio, { width: 240, margin: 2, color: { dark: '#0a1e6e', light: '#ffffff' } })
+  modalQr.value = true
+}
+
+function compartirQrWhatsApp() {
+  if (!qrAlumno.value) return
+  const tel = qrAlumno.value.contacto.telefono?.replace(/[\s\-()+]/g, '') ?? ''
+  const msg = encodeURIComponent(
+    `Hola${qrAlumno.value.contacto.tutor ? ' ' + qrAlumno.value.contacto.tutor : ''}, este es el código de acceso de ${qrAlumno.value.nombre} en Acuática Beluga. Muéstralo al llegar a clase:\n${qrLink.value}`,
+  )
+  window.open(tel ? `https://wa.me/52${tel}?text=${msg}` : `https://wa.me/?text=${msg}`, '_blank')
 }
 
 async function eliminarAlumno(a: AlumnoResumen) {
@@ -570,6 +596,9 @@ async function ejecutarImport() {
             </td>
             <td>
               <div class="d-flex align-center justify-end ga-1">
+                <v-btn icon="mdi-qrcode" size="x-small" variant="text" color="primary"
+                  title="Compartir QR de acceso"
+                  @click.stop="abrirQr(a)" />
                 <v-btn icon="mdi-pencil-outline" size="x-small" variant="text" color="grey"
                   @click.stop="abrirEditar(a)" />
                 <v-btn icon="mdi-trash-can-outline" size="x-small" variant="text" color="error"
@@ -962,6 +991,35 @@ async function ejecutarImport() {
           <template v-else-if="importPaso === 'resultado'">
             <v-btn color="primary" rounded="lg" @click="modalImportar = false">Cerrar</v-btn>
           </template>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- Modal: QR del alumno -->
+    <v-dialog v-model="modalQr" max-width="380">
+      <v-card v-if="qrAlumno" rounded="xl">
+        <div style="background:linear-gradient(135deg,#e8f4ff,#dbeafe);padding:18px 22px;border-radius:16px 16px 0 0;border-bottom:1px solid #b8d4ff" class="d-flex align-center justify-space-between">
+          <div>
+            <div style="color:#1a3fe8;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase">Código de acceso</div>
+            <div style="color:#0a1e6e;font-size:17px;font-weight:700;font-family:'Fraunces',serif">{{ qrAlumno.nombre }}</div>
+          </div>
+          <v-btn icon="mdi-close" variant="text" color="#0a1e6e" @click="modalQr = false" />
+        </div>
+
+        <v-card-text class="pa-5 text-center">
+          <img v-if="qrDataUrl" :src="qrDataUrl" alt="QR" style="width:220px;height:220px" />
+          <div style="font-size:12px;color:#9ca3af;font-family:monospace">Folio #{{ qrAlumno.folio }}</div>
+          <p style="font-size:12px;color:#6b7280;margin-top:8px">
+            Comparte el enlace por WhatsApp; el alumno abre su código y lo muestra al llegar.
+          </p>
+        </v-card-text>
+
+        <v-divider />
+        <v-card-actions class="pa-4 ga-2 justify-end">
+          <v-btn variant="text" @click="modalQr = false">Cerrar</v-btn>
+          <v-btn color="#25D366" variant="flat" rounded="lg" prepend-icon="mdi-whatsapp" style="color:#fff" @click="compartirQrWhatsApp">
+            Enviar por WhatsApp
+          </v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

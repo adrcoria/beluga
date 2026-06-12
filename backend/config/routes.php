@@ -62,6 +62,13 @@ use Beluga\Application\Actions\Reposiciones\CrearReposicionAction;
 use Beluga\Application\Actions\Reposiciones\AgendarReposicionAction;
 use Beluga\Application\Actions\Reposiciones\DesagendarReposicionAction;
 use Beluga\Application\Actions\Reposiciones\CancelarReposicionAction;
+use Beluga\Application\Actions\Asistencia\RegistrarAsistenciaAction;
+use Beluga\Application\Actions\Asistencia\ListarAsistenciasAction;
+use Beluga\Application\Actions\Reportes\IngresosAction;
+use Beluga\Application\Actions\Reportes\CarteraAction;
+use Beluga\Application\Actions\Reportes\AsistenciaReporteAction;
+use Beluga\Application\Actions\Reportes\OcupacionAction;
+use Beluga\Application\Actions\Public\ObtenerAlumnoQrAction;
 use Beluga\Application\Middleware\AuthMiddleware;
 
 return function (App $app): void {
@@ -74,6 +81,9 @@ return function (App $app): void {
     // ── Auth (pública) ────────────────────────────────────────────────────
     $app->post('/api/auth/login',         LoginAction::class);
     $app->post('/api/auth/verificar-otp', VerificarOtpAction::class);
+
+    // ── Público: datos mínimos para la página del QR del alumno ─────────────
+    $app->get('/api/public/qr/{folio}', ObtenerAlumnoQrAction::class);
 
     // ── Cambiar contraseña (requiere JWT válido) ───────────────────────────
     $app->post('/api/auth/cambiar-password', CambiarPasswordAction::class)
@@ -185,6 +195,20 @@ return function (App $app): void {
         // Folio consecutivo de recibos de pago (por sucursal)
         $group->get('/folio-pago', ObtenerFolioPagoAction::class);   // ?sucursal=
         $group->put('/folio-pago', ActualizarFolioPagoAction::class);
+
+        // Asistencia
+        $group->group('/asistencias', function (RouteCollectorProxy $g) {
+            $g->get('',  ListarAsistenciasAction::class);   // ?sucursal=&fecha=
+            $g->post('', RegistrarAsistenciaAction::class);
+        });
+
+        // Reportes
+        $group->group('/reportes', function (RouteCollectorProxy $g) {
+            $g->get('/ingresos',   IngresosAction::class);            // ?sucursal=&desde=&hasta=
+            $g->get('/cartera',    CarteraAction::class);             // ?sucursal=
+            $g->get('/asistencia', AsistenciaReporteAction::class);   // ?sucursal=&desde=&hasta=
+            $g->get('/ocupacion',  OcupacionAction::class);           // ?sucursal=
+        });
 
         // Usuarios del sistema
         $group->group('/usuarios', function (RouteCollectorProxy $g) {

@@ -133,6 +133,14 @@ const router = createRouter({
       component: () => import('@/views/LoginView.vue'),
       meta: { titulo: 'Iniciar sesión', publica: true },
     },
+
+    // ── QR público del alumno (sin sesión) ──────────────────────────────────
+    {
+      path: '/qr/:folio',
+      name: 'qr-publico',
+      component: () => import('@/views/QrView.vue'),
+      meta: { titulo: 'Mi código', publica: true },
+    },
   ],
 })
 

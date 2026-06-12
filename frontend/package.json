@@ -10,10 +10,13 @@
   },
   "dependencies": {
     "@mdi/font": "^7.4.47",
+    "@types/qrcode": "^1.5.6",
     "@vueuse/core": "^14.3.0",
     "pinia": "^3.0.4",
+    "qrcode": "^1.5.4",
     "sweetalert2": "^11.26.25",
     "vue": "^3.5.34",
+    "vue-qrcode-reader": "^5.7.3",
     "vue-router": "^4.6.4",
     "vuetify": "^3.12.6",
     "xlsx": "^0.18.5"

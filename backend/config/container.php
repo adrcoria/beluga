@@ -14,11 +14,13 @@ use Beluga\Domain\Cobro\CobroRepository;
 use Beluga\Domain\Horario\HorarioRepository;
 use Beluga\Domain\Grupo\GrupoRepository;
 use Beluga\Domain\Reposicion\ReposicionRepository;
+use Beluga\Domain\Asistencia\AsistenciaRepository;
 use Beluga\Domain\Plan\PlanRepository;
 use Beluga\Infrastructure\Persistence\MySql\AlumnoMySqlRepository;
 use Beluga\Infrastructure\Persistence\MySql\HorarioMySqlRepository;
 use Beluga\Infrastructure\Persistence\MySql\GrupoMySqlRepository;
 use Beluga\Infrastructure\Persistence\MySql\ReposicionMySqlRepository;
+use Beluga\Infrastructure\Persistence\MySql\AsistenciaMySqlRepository;
 use Beluga\Infrastructure\Persistence\MySql\CalendarioMySqlService;
 use Beluga\Infrastructure\Persistence\MySql\CobroMySqlRepository;
 use Beluga\Infrastructure\Persistence\MySql\InhabilMySqlService;
@@ -79,4 +81,5 @@ return [
     HorarioRepository::class   => \DI\autowire(HorarioMySqlRepository::class),
     GrupoRepository::class     => \DI\autowire(GrupoMySqlRepository::class),
     ReposicionRepository::class=> \DI\autowire(ReposicionMySqlRepository::class),
+    AsistenciaRepository::class=> \DI\autowire(AsistenciaMySqlRepository::class),
 ];

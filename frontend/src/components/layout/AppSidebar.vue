@@ -20,7 +20,7 @@ const secciones = [
     id: 'operacion', label: 'Operación',
     items: [
       { name: 'calendario',   path: '/calendario',   label: 'Calendario Inteligente', icon: 'mdi-calendar-month-outline' },
-      { name: 'asistencia',   path: '/asistencia',   label: 'Control de Asistencia',  icon: 'mdi-clipboard-check-outline', oculto: true },
+      { name: 'asistencia',   path: '/asistencia',   label: 'Control de Asistencia',  icon: 'mdi-clipboard-check-outline' },
       { name: 'reposiciones', path: '/reposiciones', label: 'Reposiciones',            icon: 'mdi-refresh' },
     ],
   },
@@ -40,7 +40,7 @@ const secciones = [
     ],
   },
   {
-    id: 'analisis', label: 'Análisis', oculto: true,
+    id: 'analisis', label: 'Análisis',
     items: [
       { name: 'reportes', path: '/reportes', label: 'Reportes', icon: 'mdi-chart-bar' },
     ],
