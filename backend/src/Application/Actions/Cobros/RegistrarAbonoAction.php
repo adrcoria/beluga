@@ -35,6 +35,7 @@ class RegistrarAbonoAction extends Action
                 usuarioId:       $usuarioId,
                 sucursalId:      $body['sucursalId'],
                 requiereFactura: (bool) ($body['requiereFactura'] ?? false),
+                meses:           (int) ($body['meses'] ?? 1),
             );
             return $this->json($cobro, 201);
         } catch (\RuntimeException $e) {

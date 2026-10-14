@@ -34,9 +34,13 @@ class CobroMySqlRepository implements CobroRepository
 
         $sql = 'SELECT c.*, a.nombre AS alumno_nombre, a.foto AS alumno_foto,
                        a.telefono AS alumno_telefono, a.email AS alumno_email,
-                       a.saldo_favor AS alumno_saldo_favor
+                       a.saldo_favor AS alumno_saldo_favor,
+                       pr.modalidad AS programa_modalidad,
+                       (df.alumno_folio IS NOT NULL) AS tiene_datos_fiscales
                 FROM cobros c
                 JOIN alumnos a ON a.folio = c.alumno_folio
+                LEFT JOIN alumno_programas pr ON pr.id = c.programa_id
+                LEFT JOIN alumno_datos_fiscales df ON df.alumno_folio = c.alumno_folio
                 WHERE ' . implode(' AND ', $where) . '
                 ORDER BY c.generado_en DESC';
 
@@ -51,9 +55,12 @@ class CobroMySqlRepository implements CobroRepository
             'SELECT c.*, a.nombre AS alumno_nombre, a.foto AS alumno_foto,
                     a.telefono AS alumno_telefono, a.email AS alumno_email,
                     a.saldo_favor AS alumno_saldo_favor,
-                    a.modalidad AS alumno_modalidad, a.clases_semana AS alumno_clases_semana
+                    pr.modalidad AS programa_modalidad,
+                    (df.alumno_folio IS NOT NULL) AS tiene_datos_fiscales
              FROM cobros c
              JOIN alumnos a ON a.folio = c.alumno_folio
+             LEFT JOIN alumno_programas pr ON pr.id = c.programa_id
+             LEFT JOIN alumno_datos_fiscales df ON df.alumno_folio = c.alumno_folio
              WHERE c.id = ?'
         );
         $stmt->execute([$id]);
@@ -61,7 +68,7 @@ class CobroMySqlRepository implements CobroRepository
         return $row ? $this->mapear($row) : null;
     }
 
-    public function registrarAbono(string $cobroId, float $monto, string $metodo, string $usuarioId, string $sucursalId, bool $requiereFactura = false): array
+    public function registrarAbono(string $cobroId, float $monto, string $metodo, string $usuarioId, string $sucursalId, bool $requiereFactura = false, int $meses = 1): array
     {
         $cobro = $this->porId($cobroId);
         if (!$cobro) {
@@ -74,19 +81,57 @@ class CobroMySqlRepository implements CobroRepository
             throw new RuntimeException('El monto debe ser mayor a cero');
         }
 
-        $pendiente   = round($cobro['montoNeto'] - $cobro['montoPagado'], 2);
-        $abonoReal   = min($monto, $pendiente);
-        $excedente   = round($monto - $abonoReal, 2);
+        $meses = max(1, (int) $meses);
+        if ($meses > 1 && $cobro['concepto'] !== 'mensualidad') {
+            throw new RuntimeException('Solo las mensualidades se pueden pagar por adelantado');
+        }
 
-        $nuevoMontoPagado = round($cobro['montoPagado'] + $abonoReal, 2);
-        $nuevoEstado      = $nuevoMontoPagado >= $cobro['montoNeto'] ? 'pagado' : 'parcial';
+        // FIFO: no se puede pagar un mes si hay uno MÁS VIEJO pendiente en el mismo programa.
+        if ($cobro['concepto'] === 'mensualidad' && !empty($cobro['programaId'])) {
+            $stmt = $this->pdo->prepare(
+                "SELECT periodo_desde FROM cobros
+                 WHERE programa_id = ? AND concepto = 'mensualidad'
+                   AND estado NOT IN ('pagado','condonado') AND periodo_desde < ?
+                 ORDER BY periodo_desde ASC LIMIT 1"
+            );
+            $stmt->execute([$cobro['programaId'], $cobro['periodoDesde']]);
+            $masViejo = $stmt->fetchColumn();
+            if ($masViejo) {
+                throw new RuntimeException(
+                    "Debes liquidar primero el mes más antiguo pendiente (que inicia el $masViejo) antes de pagar este.",
+                    409
+                );
+            }
+        }
 
         $this->pdo->beginTransaction();
         try {
-            // 0. Folio consecutivo de la sucursal (atómico)
+            // 0. Pago adelantado: expandir el cobro para cubrir N meses
+            //    (un solo cobro/recibo que abarca todo el periodo).
+            if ($meses > 1) {
+                $nuevoBase = round($cobro['montoBase'] * $meses, 2);
+                $nuevoNeto = round($nuevoBase - $cobro['saldoFavorAplicado'], 2);
+                $this->pdo->prepare(
+                    "UPDATE cobros
+                     SET monto_base    = :base,
+                         monto_neto    = :neto,
+                         periodo_hasta = DATE_ADD(periodo_desde, INTERVAL $meses MONTH)
+                     WHERE id = :id"
+                )->execute([':base' => $nuevoBase, ':neto' => $nuevoNeto, ':id' => $cobroId]);
+                $cobro = $this->porId($cobroId);   // recargar montos y periodo actualizados
+            }
+
+            // 0.1 Montos a partir del cobro (ya expandido si aplica)
+            $pendiente        = round($cobro['montoNeto'] - $cobro['montoPagado'], 2);
+            $abonoReal        = min($monto, $pendiente);
+            $excedente        = round($monto - $abonoReal, 2);
+            $nuevoMontoPagado = round($cobro['montoPagado'] + $abonoReal, 2);
+            $nuevoEstado      = $nuevoMontoPagado >= $cobro['montoNeto'] ? 'pagado' : 'parcial';
+
+            // 2. Folio consecutivo de la sucursal (atómico)
             $ticket = (string) $this->siguienteFolioPago($sucursalId);
 
-            // 1. Registrar pago en tabla pagos
+            // 3. Registrar pago en tabla pagos
             $this->pdo->prepare(
                 'INSERT INTO pagos (id, alumno_folio, concepto, monto, metodo, fecha, ticket,
                                    ciclo_desde, ciclo_hasta, cobro_id, usuario_id, sucursal_id)
@@ -115,14 +160,17 @@ class CobroMySqlRepository implements CobroRepository
                 ':id'     => $cobroId,
             ]);
 
-            // 3. Si el cobro quedó pagado: avanzar alumno
-            if ($nuevoEstado === 'pagado') {
-                $this->pdo->prepare(
-                    'UPDATE alumnos SET ultimo_pago = CURDATE(), vencimiento = :venc WHERE folio = :folio'
-                )->execute([
-                    ':venc'  => $cobro['periodoHasta'],
-                    ':folio' => $cobro['alumnoFolio'],
-                ]);
+            // 2.1 Si se pidió factura al cobrar, congelar aquí la copia de los
+            //     datos fiscales. Es el camino más usado —la cajera marca la
+            //     casilla mientras cobra— y sin esto el cobro quedaba marcado
+            //     como facturable pero sin RFC.
+            if ($requiereFactura) {
+                $this->copiarDatosFiscales($cobroId);
+            }
+
+            // 3. Si el cobro quedó pagado: recalcular el vencimiento del PROGRAMA
+            if ($nuevoEstado === 'pagado' && !empty($cobro['programaId'])) {
+                $this->recalcularVencimiento($cobro['programaId'], true);
             }
 
             // 4. Si hay excedente: acumular saldo a favor
@@ -144,6 +192,106 @@ class CobroMySqlRepository implements CobroRepository
         $cobroActualizado          = $this->porId($cobroId);
         $cobroActualizado['ticket'] = $ticket;
         return $cobroActualizado;
+    }
+
+    /**
+     * Registra un pago ADELANTADO de un alumno aunque no tenga cobros pendientes.
+     * Toma como inicio el vencimiento actual, asegura que exista el cobro de ese
+     * periodo y lo liquida por N meses (un solo recibo). El vencimiento avanza N meses.
+     */
+    public function registrarPagoAdelantado(string $programaId, int $meses, string $metodo, string $usuarioId, string $sucursalId, bool $requiereFactura = false): array
+    {
+        $meses = max(1, $meses);
+
+        $stmt = $this->pdo->prepare(
+            "SELECT pr.alumno_folio, pr.mensualidad, pr.vencimiento, COALESCE(a.saldo_favor, 0) AS saldo_favor
+             FROM alumno_programas pr
+             JOIN alumnos a ON a.folio = pr.alumno_folio
+             WHERE pr.id = ? AND pr.status = 'activo'"
+        );
+        $stmt->execute([$programaId]);
+        $pr = $stmt->fetch();
+        if (!$pr) {
+            throw new RuntimeException('Programa no encontrado o inactivo');
+        }
+
+        // ¿Ya existe el cobro (no pagado) del periodo actual del programa? Reusarlo.
+        $stmt = $this->pdo->prepare(
+            "SELECT id FROM cobros
+             WHERE programa_id = ? AND concepto = 'mensualidad'
+               AND periodo_desde = ? AND estado NOT IN ('pagado','condonado')
+             ORDER BY generado_en DESC LIMIT 1"
+        );
+        $stmt->execute([$programaId, $pr['vencimiento']]);
+        $cobroId = $stmt->fetchColumn();
+
+        if (!$cobroId) {
+            $cobroId = $this->crearCobroMensualidad(
+                $pr['alumno_folio'], $programaId, $pr['vencimiento'], (float) $pr['mensualidad'], (float) $pr['saldo_favor']
+            );
+        }
+
+        $cobro = $this->porId($cobroId);
+        $monto = round((float) $pr['mensualidad'] * $meses - $cobro['saldoFavorAplicado'], 2);
+
+        return $this->registrarAbono($cobroId, $monto, $metodo, $usuarioId, $sucursalId, $requiereFactura, $meses);
+    }
+
+    /**
+     * Crea el cobro de mensualidad (1 mes) para un alumno en un periodo dado.
+     * Si el saldo a favor alcanza, queda 'pagado'. Devuelve el id del cobro.
+     */
+    private function crearCobroMensualidad(string $folio, string $programaId, string $periodoDesde, float $mensualidad, float $saldoFavor): string
+    {
+        $id            = $this->uuid();
+        $saldoAplicado = min($saldoFavor, $mensualidad);
+        $neto          = max(0, $mensualidad - $saldoAplicado);
+        $estado        = $saldoFavor >= $mensualidad ? 'pagado' : 'pendiente';
+        $this->pdo->prepare(
+            "INSERT INTO cobros (id, alumno_folio, programa_id, concepto, monto_base,
+                                 saldo_favor_aplicado, monto_neto, estado,
+                                 periodo_desde, periodo_hasta)
+             VALUES (:id, :folio, :pid, 'mensualidad', :base, :sa, :neto, :estado,
+                     :desde, DATE_ADD(:desde2, INTERVAL 1 MONTH))"
+        )->execute([
+            ':id' => $id, ':folio' => $folio, ':pid' => $programaId, ':base' => $mensualidad,
+            ':sa' => $saldoAplicado, ':neto' => $neto, ':estado' => $estado,
+            ':desde' => $periodoDesde, ':desde2' => $periodoDesde,
+        ]);
+        return $id;
+    }
+
+    /**
+     * Crea la primera mensualidad de un alumno recién dado de alta, para que sea
+     * cobrable de inmediato (no espera a la generación del login). No duplica.
+     */
+    public function crearMensualidadInicial(string $folio): void
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT pr.id, pr.mensualidad, pr.vencimiento, COALESCE(a.saldo_favor, 0) AS saldo_favor
+             FROM alumno_programas pr
+             JOIN alumnos a ON a.folio = pr.alumno_folio
+             WHERE pr.alumno_folio = ? AND pr.status = 'activo'"
+        );
+        $stmt->execute([$folio]);
+        foreach ($stmt->fetchAll() as $pr) {
+            $existe = $this->pdo->prepare(
+                "SELECT 1 FROM cobros
+                 WHERE programa_id = ? AND concepto = 'mensualidad' AND periodo_desde = ? LIMIT 1"
+            );
+            $existe->execute([$pr['id'], $pr['vencimiento']]);
+            if ($existe->fetchColumn()) continue;
+
+            $this->crearCobroMensualidad($folio, $pr['id'], $pr['vencimiento'], (float) $pr['mensualidad'], (float) $pr['saldo_favor']);
+        }
+    }
+
+    private function uuid(): string
+    {
+        $d = random_bytes(16);
+        $d[6] = chr((ord($d[6]) & 0x0f) | 0x40);
+        $d[8] = chr((ord($d[8]) & 0x3f) | 0x80);
+        return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($d), 4));
     }
 
     public function crearInscripcion(string $alumnoFolio, float $monto, string $fecha): array
@@ -170,58 +318,66 @@ class CobroMySqlRepository implements CobroRepository
         return $this->mapear($stmt->fetch());
     }
 
-    public function generarManual(): int
+    public function tieneInscripcion(string $alumnoFolio): bool
     {
         $stmt = $this->pdo->prepare(
-            'INSERT INTO cobros (
-                id, alumno_folio, concepto,
-                monto_base, saldo_favor_aplicado, monto_neto,
-                estado, periodo_desde, periodo_hasta
-             )
-             SELECT
-                UUID(),
-                a.folio,
-                \'mensualidad\',
-                a.mensualidad,
-                LEAST(a.saldo_favor, a.mensualidad),
-                GREATEST(0, a.mensualidad - a.saldo_favor),
-                CASE
-                    WHEN a.saldo_favor >= a.mensualidad
-                    THEN \'pagado\' ELSE \'pendiente\'
-                END,
-                a.vencimiento,
-                DATE_ADD(a.vencimiento, INTERVAL 1 MONTH)
-             FROM alumnos a
-             WHERE a.status = \'activo\'
-               -- Solo generar cuando el cobro ya entra en la ventana de "toca pago"
-               -- (vence hoy, está vencido, o vence dentro de 7 días). Esto evita que
-               -- al pagar (vencimiento salta +1 mes) se regenere el siguiente de inmediato.
-               AND a.vencimiento <= DATE_ADD(CURDATE(), INTERVAL 7 DAY)
-               AND NOT EXISTS (
-                   SELECT 1 FROM cobros c
-                   WHERE c.alumno_folio = a.folio
-                     AND c.concepto = \'mensualidad\'
-                     AND c.periodo_desde = a.vencimiento
-               )'
+            "SELECT 1 FROM cobros WHERE alumno_folio = ? AND concepto = 'inscripcion' LIMIT 1"
         );
-        $stmt->execute();
+        $stmt->execute([$alumnoFolio]);
+        return (bool) $stmt->fetchColumn();
+    }
 
-        // Avanzar alumnos que quedaron pagados automáticamente por saldo a favor
-        $this->pdo->exec(
-            'UPDATE alumnos a
-             INNER JOIN cobros c
-                 ON c.alumno_folio = a.folio
-                AND c.periodo_desde = a.vencimiento
-                AND c.estado = \'pagado\'
-                AND c.saldo_favor_aplicado > 0
-             SET
-                a.saldo_favor = GREATEST(0, a.saldo_favor - c.monto_base),
-                a.ultimo_pago = CURDATE(),
-                a.vencimiento = DATE_ADD(a.vencimiento, INTERVAL 1 MONTH)
-             WHERE a.status = \'activo\''
+    public function generarManual(): int
+    {
+        // Modelo ACUMULATIVO: por cada programa activo se generan TODOS los meses
+        // ya iniciados (encadenados) hasta HOY, aunque no haya pagado los anteriores.
+        // Se genera el periodo el día que inicia (no antes), conforme al día de
+        // suscripción. Punto de continuación = fin del último cobro (o el vencimiento).
+        $limite = date('Y-m-d');
+
+        $programas = $this->pdo->query(
+            "SELECT pr.id, pr.alumno_folio, pr.mensualidad,
+                    COALESCE(MAX(c.periodo_hasta), pr.vencimiento) AS siguiente
+             FROM alumno_programas pr
+             JOIN alumnos a ON a.folio = pr.alumno_folio
+             LEFT JOIN cobros c ON c.programa_id = pr.id AND c.concepto = 'mensualidad'
+             WHERE pr.status = 'activo' AND a.status = 'activo'
+             GROUP BY pr.id, pr.alumno_folio, pr.mensualidad, pr.vencimiento"
+        )->fetchAll(\PDO::FETCH_ASSOC);
+
+        $existe = $this->pdo->prepare(
+            "SELECT 1 FROM cobros WHERE programa_id = ? AND concepto = 'mensualidad' AND periodo_desde = ? LIMIT 1"
+        );
+        $sig = $this->pdo->prepare("SELECT DATE_ADD(?, INTERVAL 1 MONTH)");
+        $ins = $this->pdo->prepare(
+            "INSERT INTO cobros
+                (id, alumno_folio, programa_id, concepto, monto_base,
+                 saldo_favor_aplicado, monto_neto, estado, periodo_desde, periodo_hasta)
+             VALUES (:id, :folio, :pid, 'mensualidad', :base, 0, :base2, 'pendiente',
+                     :desde, DATE_ADD(:desde2, INTERVAL 1 MONTH))"
         );
 
-        return $stmt->rowCount();
+        $creados = 0;
+        foreach ($programas as $pr) {
+            $mes = $pr['siguiente'];
+            if (!$mes) continue;
+            // Tope de seguridad por si algún programa tuviera cobertura muy vieja
+            $guard = 0;
+            while ($mes <= $limite && $guard++ < 60) {
+                $existe->execute([$pr['id'], $mes]);
+                if (!$existe->fetchColumn()) {
+                    $ins->execute([
+                        ':id' => $this->uuid(), ':folio' => $pr['alumno_folio'], ':pid' => $pr['id'],
+                        ':base' => $pr['mensualidad'], ':base2' => $pr['mensualidad'],
+                        ':desde' => $mes, ':desde2' => $mes,
+                    ]);
+                    $creados++;
+                }
+                $sig->execute([$mes]);
+                $mes = $sig->fetchColumn();
+            }
+        }
+        return $creados;
     }
 
     public function actualizarFactura(string $cobroId, ?bool $requiere, ?bool $realizada): array
@@ -239,7 +395,35 @@ class CobroMySqlRepository implements CobroRepository
         if ($set) {
             $this->pdo->prepare('UPDATE cobros SET ' . implode(', ', $set) . ' WHERE id = :id')->execute($params);
         }
+
+        // Al pedir factura se congela una copia de los datos fiscales del alumno.
+        // Si mañana corrigen el RFC, esta factura conserva con qué se emitió.
+        if ($requiere === true) {
+            $this->copiarDatosFiscales($cobroId);
+        }
+
         return $this->porId($cobroId);
+    }
+
+    /**
+     * Copia al cobro los datos fiscales vigentes del alumno. Si el alumno no
+     * los tiene capturados no se bloquea nada: el cobro queda sin copia y la
+     * lista de facturas pendientes lo marca como incompleto. No se le detiene
+     * el cobro a la cajera por un trámite administrativo.
+     */
+    private function copiarDatosFiscales(string $cobroId): void
+    {
+        $this->pdo->prepare(
+            'UPDATE cobros c
+             JOIN alumno_datos_fiscales f ON f.alumno_folio = c.alumno_folio
+             SET c.fact_razon_social   = f.razon_social,
+                 c.fact_rfc            = f.rfc,
+                 c.fact_regimen_fiscal = f.regimen_fiscal,
+                 c.fact_uso_cfdi       = f.uso_cfdi,
+                 c.fact_codigo_postal  = f.codigo_postal,
+                 c.fact_email          = f.email
+             WHERE c.id = ?'
+        )->execute([$cobroId]);
     }
 
     public function pagosDe(string $cobroId): array
@@ -259,6 +443,86 @@ class CobroMySqlRepository implements CobroRepository
         ], $stmt->fetchAll());
     }
 
+    /**
+     * Marca un cobro como "no se cobra". El mes se da por CUBIERTO: el alumno no
+     * lo debe y su vencimiento avanza igual que si hubiera pagado. El motivo es
+     * obligatorio porque siempre hay que poder explicar por qué no se cobró.
+     */
+    public function condonar(string $cobroId, string $motivo, string $usuarioId): array
+    {
+        $cobro = $this->porId($cobroId);
+        if (!$cobro) {
+            throw new RuntimeException('Cobro no encontrado');
+        }
+        if ($cobro['estado'] === 'pagado') {
+            throw new RuntimeException('Este cobro ya está liquidado');
+        }
+        if ($cobro['estado'] === 'condonado') {
+            throw new RuntimeException('Este cobro ya está marcado como no cobrable');
+        }
+        if ($cobro['montoPagado'] > 0) {
+            throw new RuntimeException(
+                'Este cobro ya tiene abonos registrados. Cancela primero los pagos si quieres condonarlo.'
+            );
+        }
+        if (trim($motivo) === '') {
+            throw new RuntimeException('Escribe el motivo por el que no se cobra');
+        }
+
+        $this->pdo->beginTransaction();
+        try {
+            $this->pdo->prepare(
+                "UPDATE cobros
+                 SET estado = 'condonado', motivo_no_cobro = :motivo,
+                     condonado_por = :usuario, condonado_en = NOW()
+                 WHERE id = :id"
+            )->execute([
+                ':motivo'  => trim($motivo),
+                ':usuario' => $usuarioId,
+                ':id'      => $cobroId,
+            ]);
+
+            // El ciclo avanza: si no, el mes condonado seguiría anclando el
+            // vencimiento y el alumno aparecería vencido para siempre.
+            if (!empty($cobro['programaId'])) {
+                $this->recalcularVencimiento($cobro['programaId'], false);
+            }
+
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
+
+        return $this->porId($cobroId);
+    }
+
+    /**
+     * Deja el vencimiento del programa en el mes MÁS VIEJO que siga por cobrar
+     * (correcto aunque paguen fuera de orden); si ya no queda nada, en el fin de
+     * su última cobertura. Los condonados cuentan como cubiertos.
+     *
+     * @param bool $tocarUltimoPago true al liquidar un cobro (hubo dinero de por
+     *                              medio), false al condonar: no hubo pago que registrar.
+     */
+    private function recalcularVencimiento(string $programaId, bool $tocarUltimoPago): void
+    {
+        $setUltimoPago = $tocarUltimoPago ? 'ultimo_pago = CURDATE(),' : '';
+
+        $this->pdo->prepare(
+            "UPDATE alumno_programas p
+             SET $setUltimoPago
+                 vencimiento = COALESCE(
+                     (SELECT MIN(x.periodo_desde) FROM cobros x
+                       WHERE x.programa_id = p.id AND x.concepto = 'mensualidad'
+                         AND x.estado NOT IN ('pagado','condonado')),
+                     (SELECT MAX(x.periodo_hasta) FROM cobros x
+                       WHERE x.programa_id = p.id AND x.concepto = 'mensualidad')
+                 )
+             WHERE p.id = :pid"
+        )->execute([':pid' => $programaId]);
+    }
+
     /** Devuelve el siguiente folio consecutivo de la sucursal e incrementa el contador (atómico). */
     private function siguienteFolioPago(string $sucursalId): int
     {
@@ -275,6 +539,8 @@ class CobroMySqlRepository implements CobroRepository
         return [
             'id'               => $row['id'],
             'alumnoFolio'      => $row['alumno_folio'],
+            'programaId'       => $row['programa_id'] ?? null,
+            'programaModalidad'=> $row['programa_modalidad'] ?? null,
             'concepto'         => $row['concepto'],
             'alumnoNombre'     => $row['alumno_nombre'],
             'alumnoFoto'       => $row['alumno_foto'] ?? null,
@@ -286,8 +552,20 @@ class CobroMySqlRepository implements CobroRepository
             'montoNeto'        => (float) $row['monto_neto'],
             'montoPagado'      => (float) $row['monto_pagado'],
             'estado'           => $row['estado'],
+            'motivoNoCobro'    => $row['motivo_no_cobro'] ?? null,
             'requiereFactura'  => (bool) ($row['requiere_factura'] ?? false),
+            // Para avisar al cobrar que faltan datos, antes de marcar la factura
+            'alumnoTieneDatosFiscales' => (bool) ($row['tiene_datos_fiscales'] ?? false),
             'facturaRealizada' => (bool) ($row['factura_realizada'] ?? false),
+            // Copia congelada de los datos fiscales con los que se pidió la factura
+            'datosFactura'     => empty($row['fact_rfc']) ? null : [
+                'razonSocial'   => $row['fact_razon_social'],
+                'rfc'           => $row['fact_rfc'],
+                'regimenFiscal' => $row['fact_regimen_fiscal'],
+                'usoCfdi'       => $row['fact_uso_cfdi'],
+                'codigoPostal'  => $row['fact_codigo_postal'],
+                'email'         => $row['fact_email'],
+            ],
             'periodoDesde'     => $row['periodo_desde'],
             'periodoHasta'     => $row['periodo_hasta'],
             'generadoEn'       => $row['generado_en'],

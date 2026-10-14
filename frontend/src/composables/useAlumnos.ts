@@ -1,11 +1,26 @@
 import { useApi } from './useApi'
 
+export interface ProgramaAlumno {
+  id: string
+  modalidad: string
+  plan: { clasesSemana: number; mensualidad: number; label: string | null }
+  fechaInicio: string
+  diaPago: number
+  ultimoPago?: string | null
+  vencimiento: string
+  descuento?: { pct: number; motivo: string } | null
+  status: 'activo' | 'baja'
+  tocaPago: boolean
+  diasMora: number
+  montoConDescuento: number
+}
+
 export interface AlumnoResumen {
   folio: string
   nombre: string
   fechaNacimiento?: string
   foto?: string
-  modalidad: 'PART' | 'GRUPAL' | 'MATRO'
+  modalidad: string
   plan: { clasesSemana: number; mensualidad: number; label: string | null }
   vencimiento: string
   ultimoPago?: string
@@ -19,7 +34,44 @@ export interface AlumnoResumen {
   disponibilidad: { dias: string[]; horaInicio?: string; horaFin?: string }
   fechaInicio: string
   diaPago: number
+  programas: ProgramaAlumno[]
+  /** Prealumnos: de dónde llegó y qué se le ofreció. */
+  notas?: string | null
+  /** Cuándo vino a clase muestra. Se conserva aunque se inscriba. */
+  fechaClaseMuestra?: string | null
 }
+
+/** Datos fiscales vigentes del alumno. Uno por alumno; se reusan en cada factura. */
+export interface DatosFiscales {
+  alumnoFolio?:   string
+  razonSocial:    string
+  rfc:            string
+  regimenFiscal:  string | null
+  usoCfdi:        string | null
+  codigoPostal:   string | null
+  email:          string | null
+  actualizadoEn?: string
+}
+
+// Catálogos del SAT. Son claves fijas y no cambian con la operación de la
+// escuela, así que viven aquí y no en base de datos. Se listan solo los que
+// aplican a una escuela de natación que factura a personas físicas.
+export const USOS_CFDI = [
+  { value: 'G03', label: 'G03 · Gastos en general' },
+  { value: 'D10', label: 'D10 · Pagos por servicios educativos' },
+  { value: 'S01', label: 'S01 · Sin efectos fiscales' },
+  { value: 'G01', label: 'G01 · Adquisición de mercancías' },
+  { value: 'P01', label: 'P01 · Por definir' },
+] as const
+
+export const REGIMENES_FISCALES = [
+  { value: '605', label: '605 · Sueldos y salarios' },
+  { value: '612', label: '612 · Actividad empresarial y profesional' },
+  { value: '616', label: '616 · Sin obligaciones fiscales' },
+  { value: '626', label: '626 · RESICO' },
+  { value: '601', label: '601 · General de ley personas morales' },
+  { value: '603', label: '603 · Personas morales sin fines de lucro' },
+] as const
 
 export interface PlanCatalogo {
   id: string
@@ -89,5 +141,48 @@ export function useAlumnos() {
     return api.delete(`/api/alumnos/${folio}`)
   }
 
-  return { listar, obtener, crear, actualizar, eliminar, listarPlanes, crearPlan, actualizarPlan, eliminarPlan }
+  // ── Programas (multimodalidad) ──────────────────────────────────────────
+  function crearPrograma(folio: string, datos: {
+    modalidad: string
+    plan: { clasesSemana: number; mensualidad: number }
+    descuento?: { pct: number; motivo: string } | null
+    fechaInicio: string
+  }): Promise<AlumnoResumen> {
+    return api.post(`/api/alumnos/${folio}/programas`, datos)
+  }
+
+  function actualizarPrograma(id: string, datos: Record<string, unknown>): Promise<ProgramaAlumno> {
+    return api.put(`/api/alumnos/programas/${id}`, datos)
+  }
+
+  function bajaPrograma(id: string): Promise<ProgramaAlumno> {
+    return api.post(`/api/alumnos/programas/${id}/baja`, {})
+  }
+
+  // Aplica desde la siguiente mensualidad: los cobros ya generados no cambian
+  function cambiarDiaPago(id: string, diaPago: number): Promise<ProgramaAlumno> {
+    return api.put(`/api/alumnos/programas/${id}/dia-pago`, { diaPago })
+  }
+
+  // La fecha de pago es obligatoria: al volver el alumno se confirma con qué ciclo entra
+  function reactivarPrograma(id: string, fechaPago: string): Promise<ProgramaAlumno> {
+    return api.post(`/api/alumnos/programas/${id}/reactivar`, { fechaPago })
+  }
+
+  // ── Datos de facturación ────────────────────────────────────────────────
+  function obtenerDatosFiscales(folio: string): Promise<DatosFiscales | null> {
+    return api.get(`/api/alumnos/${folio}/datos-fiscales`)
+  }
+
+  function guardarDatosFiscales(folio: string, datos: DatosFiscales): Promise<DatosFiscales> {
+    return api.put(`/api/alumnos/${folio}/datos-fiscales`, datos)
+  }
+
+  return {
+    listar, obtener, crear, actualizar, eliminar,
+    listarPlanes, crearPlan, actualizarPlan, eliminarPlan,
+    crearPrograma, actualizarPrograma, bajaPrograma,
+    cambiarDiaPago, reactivarPrograma,
+    obtenerDatosFiscales, guardarDatosFiscales,
+  }
 }

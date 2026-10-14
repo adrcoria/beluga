@@ -41,6 +41,9 @@ class CrearAsignacionAction extends Action
                 'grupoId'      => $b['grupoId'] ?? null,
                 'vigenteDesde' => $b['vigenteDesde'],
                 'vigenteHasta' => $b['vigenteHasta'] ?? null,
+                // Clase muestra: ocupa la celda una sola fecha y se pinta
+                // distinto. No se repite cada semana como una clase normal.
+                'esMuestra'    => !empty($b['esMuestra']),
             ]);
         } catch (RuntimeException $e) {
             return $this->error($e->getMessage(), $e->getCode() ?: 400);

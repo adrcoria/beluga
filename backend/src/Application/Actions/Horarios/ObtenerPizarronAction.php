@@ -8,6 +8,7 @@ use Beluga\Application\Actions\Action;
 use Beluga\Domain\Horario\HorarioRepository;
 use Beluga\Domain\Instructor\InstructorRepository;
 use Beluga\Domain\Reposicion\ReposicionRepository;
+use Beluga\Domain\Ausencia\AusenciaRepository;
 use PDO;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Log\LoggerInterface;
@@ -19,6 +20,7 @@ class ObtenerPizarronAction extends Action
         private readonly HorarioRepository $horarios,
         private readonly InstructorRepository $instructores,
         private readonly ReposicionRepository $reposiciones,
+        private readonly AusenciaRepository $ausencias,
         private readonly PDO $pdo
     ) {
         parent::__construct($logger);
@@ -46,6 +48,11 @@ class ObtenerPizarronAction extends Action
             'config'       => $this->config(),
             'instructores' => $this->instructores->listar($sucursalId),
             'celdas'       => array_merge($celdas, $reposiciones),
+            // Días en que un alumno faltó y tiene reposición. No son celdas:
+            // marcan la clase habitual que se está reponiendo.
+            'faltas'       => $this->reposiciones->faltasEnSemana($sucursalId, $lunes, $sabado),
+            // Avisos de «no viene» de esta semana, con su veredicto de derecho
+            'ausencias'    => $this->ausencias->enSemana($sucursalId, $lunes, $sabado),
         ]);
     }
 
@@ -60,6 +67,9 @@ class ObtenerPizarronAction extends Action
             'horaInicio' => $map['horario_grid_inicio'] ?? '08:00',
             'horaFin'    => $map['horario_grid_fin']    ?? '21:00',
             'cupoGrupal' => (int) ($map['horario_cupo_grupal'] ?? 6),
+            // Anticipación con la que avisar da derecho a reposición: el
+            // pizarrón la usa para decirlo antes de registrar la falta.
+            'horasAviso' => (float) ($map['ausencia_horas_aviso'] ?? 2),
         ];
     }
 }

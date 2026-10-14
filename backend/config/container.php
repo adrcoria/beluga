@@ -3,6 +3,10 @@
 declare(strict_types=1);
 
 use Beluga\Domain\Alumno\AlumnoRepository;
+use Beluga\Domain\Alumno\DatosFiscalesRepository;
+use Beluga\Domain\Ausencia\AusenciaRepository;
+use Beluga\Infrastructure\Persistence\MySql\AusenciaMySqlRepository;
+use Beluga\Infrastructure\Persistence\MySql\DatosFiscalesMySqlRepository;
 use Beluga\Domain\Usuario\UsuarioRepository;
 use Beluga\Infrastructure\Mail\Mailer;
 use Beluga\Infrastructure\Persistence\MySql\UsuarioMySqlRepository;
@@ -29,6 +33,9 @@ use Beluga\Infrastructure\Persistence\MySql\PagoMySqlService;
 use Beluga\Infrastructure\Persistence\MySql\PlanMySqlRepository;
 use Monolog\Handler\StreamHandler;
 use Monolog\Logger;
+use Beluga\Application\Actions\Auth\MisPermisosAction;
+use Beluga\Application\Middleware\PermisosMiddleware;
+use Psr\Container\ContainerInterface;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Log\LoggerInterface;
 use Slim\Psr7\Factory\ResponseFactory;
@@ -68,8 +75,29 @@ return [
         );
     },
 
+    // El ticket de cobro se imprime en el navegador (frontend utils/ticket58.ts).
+    // Aquí no se registra ningún servicio de impresión: mandarle ESC/POS a la
+    // térmica exigiría un programa instalado en cada caja, y se descartó.
+
+    // ── Permisos por rol ──────────────────────────────────────────────────
+    // La matriz la llena el cliente en docs/matriz_accesos_por_rol.xlsx y de
+    // ahí se genera permisos.php (ver scripts/generar_permisos.py).
+    'permisos' => fn() => require __DIR__ . '/permisos.php',
+
+    PermisosMiddleware::class => fn(ContainerInterface $c) => new PermisosMiddleware(
+        $c->get(ResponseFactoryInterface::class),
+        $c->get('permisos')
+    ),
+
+    MisPermisosAction::class => fn(ContainerInterface $c) => new MisPermisosAction(
+        $c->get(LoggerInterface::class),
+        $c->get('permisos')
+    ),
+
     // ── Repositorios e implementaciones de dominio ────────────────────────
     AlumnoRepository::class    => \DI\autowire(AlumnoMySqlRepository::class),
+    AusenciaRepository::class  => \DI\autowire(AusenciaMySqlRepository::class),
+    DatosFiscalesRepository::class => \DI\autowire(DatosFiscalesMySqlRepository::class),
     UsuarioRepository::class   => \DI\autowire(UsuarioMySqlRepository::class),
     Mailer::class              => \DI\autowire(Mailer::class),
     InstructorRepository::class=> \DI\autowire(InstructorMySqlRepository::class),

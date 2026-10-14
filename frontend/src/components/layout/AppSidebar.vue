@@ -29,6 +29,7 @@ const secciones = [
     items: [
       { name: 'alumnos',      path: '/alumnos',      label: 'Alumnos',      icon: 'mdi-account-group-outline' },
       { name: 'instructores', path: '/instructores', label: 'Instructores', icon: 'mdi-account-tie-outline' },
+      { name: 'cumpleanos',   path: '/cumpleanos',   label: 'Cumpleañeros', icon: 'mdi-cake-variant' },
     ],
   },
   {
@@ -56,16 +57,15 @@ const secciones = [
         icon: 'mdi-book-open-variant-outline',
         items: [
           { name: 'catalogos',  path: '/config/catalogos',  label: 'Planes de pago', icon: 'mdi-currency-usd' },
-          { name: 'horarios',   path: '/config/horarios',   label: 'Horarios',        icon: 'mdi-clock-time-four-outline' },
+          { name: 'horarios',   path: '/config/horarios',   label: 'Parámetros generales', icon: 'mdi-tune-variant', modulo: 'parametros' },
         ],
       },
     ],
   },
   {
-    id: 'premium', label: 'Premium', oculto: true,
+    id: 'premium', label: 'Premium',
     items: [
       { name: 'preinscripcion', path: '/preinscripcion', label: 'Preinscripción QR',  icon: 'mdi-qrcode',               pro: true },
-      { name: 'multi-sucursal', path: '/multi-sucursal', label: 'Multi-sucursal',      icon: 'mdi-map-marker-multiple-outline', pro: true },
       { name: 'portal-alumno',  path: '/portal-alumno',  label: 'Portal del Alumno',  icon: 'mdi-tablet-cellphone',     pro: true },
       { name: 'comunicacion',   path: '/comunicacion',   label: 'Comunicación',        icon: 'mdi-message-outline',      pro: true },
     ],
@@ -73,6 +73,26 @@ const secciones = [
 ]
 
 const nombreActivo = computed(() => route.name as string)
+
+// ── Filtrado por permisos ───────────────────────────────────────────────
+// Cada rol ve solo sus menús, según la matriz que definió el cliente. Un menú
+// sin entrada en la matriz (premium, ocultos) no está gobernado y se muestra.
+const visible = (item: { name: string; modulo?: string; oculto?: boolean }) =>
+  !item.oculto && auth.puedeVer(item.modulo ?? item.name)
+
+/** Secciones que conservan al menos un menú visible para este rol. */
+const seccionesVisibles = computed(() =>
+  secciones
+    .filter(s => !(s as any).oculto)
+    .map(s => ({
+      ...s,
+      items:  s.items.filter(visible),
+      grupos: ((s as any).grupos ?? [])
+        .map((g: any) => ({ ...g, items: g.items.filter(visible) }))
+        .filter((g: any) => g.items.length > 0),
+    }))
+    .filter(s => s.items.length > 0 || s.grupos.length > 0)
+)
 
 function cerrarSesion() {
   auth.logout()
@@ -103,14 +123,14 @@ function cerrarSesion() {
 
     <!-- Nav -->
     <v-list density="compact" nav class="px-2 py-3">
-      <template v-for="sec in secciones.filter(s => !(s as any).oculto)" :key="sec.id">
+      <template v-for="sec in seccionesVisibles" :key="sec.id">
         <v-list-subheader
           :title="sec.label"
           style="font-size:9.5px;font-weight:700;letter-spacing:0.14em;color:rgba(255,255,255,0.32);text-transform:uppercase;min-height:28px;padding-top:12px"
         />
         <!-- Items planos -->
         <v-list-item
-          v-for="item in sec.items.filter(i => !(i as any).oculto)"
+          v-for="item in sec.items"
           :key="item.name"
           :to="item.path"
           :prepend-icon="item.icon"
@@ -127,7 +147,7 @@ function cerrarSesion() {
         </v-list-item>
         <!-- Grupos expandibles (submenús) -->
         <v-list-group
-          v-for="grupo in (sec as any).grupos ?? []"
+          v-for="grupo in sec.grupos"
           :key="grupo.label"
           :value="grupo.label"
         >

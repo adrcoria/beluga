@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Beluga\Infrastructure\Persistence\MySql;
 
 use Beluga\Domain\Horario\HorarioRepository;
+use Beluga\Domain\Instructor\InstructorRepository;
 use PDO;
 use RuntimeException;
 
@@ -12,7 +13,10 @@ class HorarioMySqlRepository implements HorarioRepository
 {
     private const INFINITO = '9999-12-31';
 
-    public function __construct(private readonly PDO $pdo) {}
+    public function __construct(
+        private readonly PDO $pdo,
+        private readonly InstructorRepository $instructores
+    ) {}
 
     // ── Pizarrón de la semana ──────────────────────────────────────────────
     public function pizarron(string $sucursalId, string $lunes): array
@@ -21,7 +25,7 @@ class HorarioMySqlRepository implements HorarioRepository
 
         $stmt = $this->pdo->prepare(
             "SELECT hr.id, hr.instructor_id, hr.dia, hr.hora_inicio, hr.duracion_min,
-                    hr.modalidad, hr.alumno_folio, hr.grupo_id,
+                    hr.modalidad, hr.es_muestra, hr.alumno_folio, hr.grupo_id,
                     hr.vigente_desde, hr.vigente_hasta,
                     al.nombre AS alumno_nombre,
                     g.nombre  AS grupo_nombre,
@@ -53,21 +57,39 @@ class HorarioMySqlRepository implements HorarioRepository
         $this->pdo->prepare(
             'INSERT INTO horario_recurrente
                 (id, sucursal_id, instructor_id, dia, hora_inicio, duracion_min,
-                 modalidad, alumno_folio, grupo_id, vigente_desde, vigente_hasta)
-             VALUES (:id,:suc,:inst,:dia,:hi,:dur,:mod,:folio,:grupo,:vd,:vh)'
+                 modalidad, es_muestra, alumno_folio, programa_id, grupo_id, vigente_desde, vigente_hasta)
+             VALUES (:id,:suc,:inst,:dia,:hi,:dur,:mod,:muestra,:folio,:pid,:grupo,:vd,:vh)'
         )->execute([
-            ':id'    => $id,
-            ':suc'   => $datos['sucursalId'],
-            ':inst'  => $datos['instructorId'],
-            ':dia'   => $datos['dia'],
-            ':hi'    => $datos['horaInicio'],
-            ':dur'   => $datos['duracionMin'] ?? 30,
-            ':mod'   => $datos['modalidad'],
-            ':folio' => $datos['alumnoFolio'] ?? null,
-            ':grupo' => $datos['grupoId'] ?? null,
-            ':vd'    => $datos['vigenteDesde'],
-            ':vh'    => $datos['vigenteHasta'] ?? null,
+            ':id'      => $id,
+            ':suc'     => $datos['sucursalId'],
+            ':inst'    => $datos['instructorId'],
+            ':dia'     => $datos['dia'],
+            ':hi'      => $datos['horaInicio'],
+            ':dur'     => $datos['duracionMin'] ?? 30,
+            ':mod'     => $datos['modalidad'],
+            ':muestra' => !empty($datos['esMuestra']) ? 1 : 0,
+            ':folio'   => $datos['alumnoFolio'] ?? null,
+            ':pid'     => $this->programaIdDe($datos['alumnoFolio'] ?? null, $datos['modalidad']),
+            ':grupo'   => $datos['grupoId'] ?? null,
+            ':vd'      => $datos['vigenteDesde'],
+            ':vh'      => $datos['vigenteHasta'] ?? null,
         ]);
+
+        // Deja constancia en el alumno de cuándo vino a probar. El reporte de
+        // prealumnos mide con este dato cuántos terminaron inscribiéndose, así
+        // que tiene que sobrevivir a que el bloque se borre o el alumno pase a
+        // activo. Si ya probó antes, se conserva la primera vez.
+        if (!empty($datos['esMuestra']) && !empty($datos['alumnoFolio'])) {
+            $this->pdo->prepare(
+                'UPDATE alumnos
+                    SET fecha_clase_muestra = LEAST(COALESCE(fecha_clase_muestra, :f1), :f2)
+                  WHERE folio = :folio'
+            )->execute([
+                ':f1'    => $datos['vigenteDesde'],
+                ':f2'    => $datos['vigenteDesde'],
+                ':folio' => $datos['alumnoFolio'],
+            ]);
+        }
 
         return $this->porId($id);
     }
@@ -88,6 +110,9 @@ class HorarioMySqlRepository implements HorarioRepository
             'horaInicio'   => $cambios['horaInicio']   ?? $regla['horaInicio'],
             'duracionMin'  => $cambios['duracionMin']  ?? $regla['duracionMin'],
             'modalidad'    => $regla['modalidad'],
+            // Se arrastra: si no, al mover una clase muestra perdería la marca
+            // y la validación grupal la rechazaría.
+            'esMuestra'    => $regla['esMuestra'] ?? false,
             'alumnoFolio'  => $regla['alumnoFolio'],
             'grupoId'      => $regla['grupoId'],
             'vigenteDesde' => $desdeLunes,
@@ -200,13 +225,73 @@ class HorarioMySqlRepository implements HorarioRepository
         }, $stmt->fetchAll());
     }
 
+    // ── Liberar lugares al dar de baja ───────────────────────────────────────
+
+    public function liberarDeAlumno(string $folio, string $desde, ?string $programaId = null): int
+    {
+        $filtro = $programaId ? 'AND programa_id = :pid' : '';
+        $fin    = date('Y-m-d', strtotime($desde . ' -1 day'));
+
+        // Las que aún no habían empezado no dejan historial que valga la pena:
+        // se borran para no dejar reglas fantasma con vigencia invertida.
+        $sqlBorrar = "DELETE FROM horario_recurrente
+                      WHERE alumno_folio = :folio AND vigente_desde >= :desde $filtro";
+        $stmt = $this->pdo->prepare($sqlBorrar);
+        $stmt->bindValue(':folio', $folio);
+        $stmt->bindValue(':desde', $desde);
+        if ($programaId) $stmt->bindValue(':pid', $programaId);
+        $stmt->execute();
+        $afectadas = $stmt->rowCount();
+
+        // Las vigentes se cierran el día anterior: conservan el historial
+        $sqlCerrar = "UPDATE horario_recurrente
+                      SET vigente_hasta = :fin
+                      WHERE alumno_folio = :folio
+                        AND vigente_desde < :desde
+                        AND (vigente_hasta IS NULL OR vigente_hasta > :fin2)
+                        $filtro";
+        $stmt = $this->pdo->prepare($sqlCerrar);
+        $stmt->bindValue(':fin', $fin);
+        $stmt->bindValue(':fin2', $fin);
+        $stmt->bindValue(':folio', $folio);
+        $stmt->bindValue(':desde', $desde);
+        if ($programaId) $stmt->bindValue(':pid', $programaId);
+        $stmt->execute();
+
+        return $afectadas + $stmt->rowCount();
+    }
+
+    public function quitarDeGrupos(string $folio, ?string $modalidad = null): int
+    {
+        if ($modalidad === null) {
+            $stmt = $this->pdo->prepare('DELETE FROM grupo_alumnos WHERE alumno_folio = ?');
+            $stmt->execute([$folio]);
+            return $stmt->rowCount();
+        }
+
+        // Las clases de grupo no llevan programa_id (van por grupo_id), así que
+        // el vínculo con la modalidad se resuelve por las reglas del grupo.
+        $stmt = $this->pdo->prepare(
+            'DELETE ga FROM grupo_alumnos ga
+             WHERE ga.alumno_folio = :folio
+               AND EXISTS (SELECT 1 FROM horario_recurrente hr
+                            WHERE hr.grupo_id = ga.grupo_id AND hr.modalidad = :mod)'
+        );
+        $stmt->execute([':folio' => $folio, ':mod' => $modalidad]);
+        return $stmt->rowCount();
+    }
+
     // ── Validación de conflictos (dura) ──────────────────────────────────────
     private function validar(array $d, ?string $excludeId): void
     {
-        $esGrupal = ($d['modalidad'] === 'GRUPAL');
+        // Una clase muestra es un visitante en una celda libre por una sola
+        // fecha: no se integra al grupo, así que va por alumno aunque la
+        // modalidad que viene a probar sea grupal.
+        $esMuestra = !empty($d['esMuestra']);
+        $esGrupal  = !$esMuestra && in_array($d['modalidad'], ['GRUPAL', 'MINI'], true);
 
         if ($esGrupal && empty($d['grupoId'])) {
-            throw new RuntimeException('Una clase grupal requiere un grupo', 422);
+            throw new RuntimeException('Una clase de grupo requiere un grupo', 422);
         }
         if (!$esGrupal && empty($d['alumnoFolio'])) {
             throw new RuntimeException('Selecciona un alumno', 422);
@@ -216,8 +301,8 @@ class HorarioMySqlRepository implements HorarioRepository
         $vh = $d['vigenteHasta'] ?? null;
         $exclude = $excludeId ?? '';
 
-        // 0. El instructor debe estar disponible en esa franja
-        $this->validarDisponibilidad($d['instructorId'], $d['horaInicio'], $d['duracionMin'] ?? 30);
+        // 0. El instructor debe trabajar ese día y a esa hora
+        $this->instructores->disponibleEn($d['instructorId'], $d['dia'], $d['horaInicio'], $d['duracionMin'] ?? 30);
 
         // 1. Instructor ocupado en esa franja
         $stmt = $this->pdo->prepare(
@@ -264,8 +349,8 @@ class HorarioMySqlRepository implements HorarioRepository
             throw new RuntimeException('Un alumno ya tiene clase en ese horario', 409);
         }
 
-        // 3. Ningún alumno puede superar las clases/semana de su plan
-        $this->validarLimiteSemanal($folios, $vd, $vh, $exclude);
+        // 3. Ningún alumno puede superar las clases/semana de su plan EN ESTA MODALIDAD
+        $this->validarLimiteSemanal($folios, $vd, $vh, $exclude, $d['modalidad']);
     }
 
     /**
@@ -273,23 +358,31 @@ class HorarioMySqlRepository implements HorarioRepository
      * Cuenta las reglas vigentes en el mismo periodo donde el alumno participa
      * (directo o como miembro de un grupo), en cualquier día/hora.
      */
-    private function validarLimiteSemanal(array $folios, string $vd, ?string $vh, string $excludeId): void
+    private function validarLimiteSemanal(array $folios, string $vd, ?string $vh, string $excludeId, string $modalidad): void
     {
         if (empty($folios)) return;
         $vhEff = $vh ?? self::INFINITO;
 
+        // Límite = clases/semana del PROGRAMA de esa modalidad (no se mezclan modalidades)
         $place = implode(',', array_fill(0, count($folios), '?'));
-        $pStmt = $this->pdo->prepare("SELECT folio, nombre, clases_semana FROM alumnos WHERE folio IN ($place)");
-        $pStmt->execute($folios);
+        $pStmt = $this->pdo->prepare(
+            "SELECT pr.alumno_folio AS folio, a.nombre, pr.clases_semana
+             FROM alumno_programas pr
+             JOIN alumnos a ON a.folio = pr.alumno_folio
+             WHERE pr.alumno_folio IN ($place) AND pr.modalidad = ? AND pr.status = 'activo'"
+        );
+        $pStmt->execute([...array_values($folios), $modalidad]);
         $planes = [];
         foreach ($pStmt->fetchAll() as $r) {
             $planes[$r['folio']] = ['n' => (int) $r['clases_semana'], 'nombre' => $r['nombre']];
         }
 
+        // Cuenta solo las clases de ESTA modalidad en el periodo vigente
         $cnt = $this->pdo->prepare(
             "SELECT COUNT(*) FROM horario_recurrente hr
              LEFT JOIN grupo_alumnos ga ON ga.grupo_id = hr.grupo_id
              WHERE hr.id <> :ex
+               AND hr.modalidad = :mod
                AND hr.vigente_desde <= :vh
                AND COALESCE(hr.vigente_hasta, :inf) >= :vd
                AND (hr.alumno_folio = :f1 OR ga.alumno_folio = :f2)"
@@ -297,38 +390,35 @@ class HorarioMySqlRepository implements HorarioRepository
 
         foreach ($folios as $folio) {
             $limite = $planes[$folio]['n'] ?? 0;
-            if ($limite <= 0) continue;  // sin plan definido: no se limita
+            if ($limite <= 0) continue;  // sin programa de esa modalidad: no se limita
 
             $cnt->execute([
-                ':ex' => $excludeId, ':vh' => $vhEff, ':inf' => self::INFINITO, ':vd' => $vd,
+                ':ex' => $excludeId, ':mod' => $modalidad, ':vh' => $vhEff, ':inf' => self::INFINITO, ':vd' => $vd,
                 ':f1' => $folio, ':f2' => $folio,
             ]);
             if ((int) $cnt->fetchColumn() + 1 > $limite) {
                 $nombre = $planes[$folio]['nombre'] ?? $folio;
                 $suf    = $limite === 1 ? 'clase' : 'clases';
                 throw new RuntimeException(
-                    "$nombre ya tiene sus $limite $suf de la semana (plan de $limite/sem). Sube su plan para asignar más.",
+                    "$nombre ya tiene sus $limite $suf de $modalidad en la semana (plan de $limite/sem). Sube su plan para asignar más.",
                     409
                 );
             }
         }
     }
 
-    /** El instructor debe estar disponible (su rango horario cubre la franja). */
-    private function validarDisponibilidad(string $instructorId, string $horaInicio, int $durMin): void
+    /** Resuelve el programa activo de un alumno para una modalidad (o null). */
+    private function programaIdDe(?string $folio, string $modalidad): ?string
     {
-        $stmt = $this->pdo->prepare('SELECT disp_hora_inicio, disp_hora_fin FROM instructores WHERE id = ?');
-        $stmt->execute([$instructorId]);
-        $r = $stmt->fetch();
-        if (!$r || !$r['disp_hora_inicio'] || !$r['disp_hora_fin']) {
-            return; // sin rango definido = sin restricción
-        }
-        $ini = substr((string) $r['disp_hora_inicio'], 0, 5);
-        $fin = substr((string) $r['disp_hora_fin'], 0, 5);
-        $hf  = date('H:i', (int) strtotime($horaInicio) + $durMin * 60);
-        if ($horaInicio < $ini || $hf > $fin) {
-            throw new RuntimeException("El instructor solo está disponible de $ini a $fin", 409);
-        }
+        if (!$folio) return null;
+        $stmt = $this->pdo->prepare(
+            "SELECT id FROM alumno_programas
+             WHERE alumno_folio = ? AND modalidad = ? AND status = 'activo'
+             ORDER BY fecha_inicio ASC LIMIT 1"
+        );
+        $stmt->execute([$folio, $modalidad]);
+        $id = $stmt->fetchColumn();
+        return $id ?: null;
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -338,12 +428,15 @@ class HorarioMySqlRepository implements HorarioRepository
         $this->pdo->prepare(
             'INSERT INTO horario_recurrente
                 (id, sucursal_id, instructor_id, dia, hora_inicio, duracion_min,
-                 modalidad, alumno_folio, grupo_id, vigente_desde, vigente_hasta)
-             VALUES (:id,:suc,:inst,:dia,:hi,:dur,:mod,:folio,:grupo,:vd,:vh)'
+                 modalidad, es_muestra, alumno_folio, programa_id, grupo_id, vigente_desde, vigente_hasta)
+             VALUES (:id,:suc,:inst,:dia,:hi,:dur,:mod,:muestra,:folio,:pid,:grupo,:vd,:vh)'
         )->execute([
             ':id' => $id, ':suc' => $datos['sucursalId'], ':inst' => $datos['instructorId'],
             ':dia' => $datos['dia'], ':hi' => $datos['horaInicio'], ':dur' => $datos['duracionMin'] ?? 30,
-            ':mod' => $datos['modalidad'], ':folio' => $datos['alumnoFolio'] ?? null,
+            ':mod' => $datos['modalidad'],
+            ':muestra' => !empty($datos['esMuestra']) ? 1 : 0,
+            ':folio' => $datos['alumnoFolio'] ?? null,
+            ':pid' => $this->programaIdDe($datos['alumnoFolio'] ?? null, $datos['modalidad']),
             ':grupo' => $datos['grupoId'] ?? null, ':vd' => $datos['vigenteDesde'],
             ':vh' => $datos['vigenteHasta'] ?? null,
         ]);
@@ -387,6 +480,8 @@ class HorarioMySqlRepository implements HorarioRepository
             'horaInicio'          => substr((string) $r['hora_inicio'], 0, 5),
             'duracionMin'         => (int) $r['duracion_min'],
             'modalidad'           => $r['modalidad'],
+            // Clase de prueba de un prealumno: ocupa la celda una sola fecha
+            'esMuestra'           => (bool) ($r['es_muestra'] ?? false),
             'alumnoFolio'         => $r['alumno_folio'],
             'alumnoNombre'        => $r['alumno_nombre'] ?? null,
             'grupoId'             => $r['grupo_id'],

@@ -5,6 +5,10 @@ import { useAsistencia, type Asistencia, type RegistroAsistencia } from '@/compo
 import { useAlumnos, type AlumnoResumen } from '@/composables/useAlumnos'
 import { useSwal } from '@/composables/useSwal'
 import { useSucursalStore } from '@/stores/sucursal'
+import { usePermisos } from '@/composables/usePermisos'
+import SoloLectura from '@/components/SoloLectura.vue'
+
+const { puedeEditar } = usePermisos('asistencia')
 
 const asistenciaApi = useAsistencia()
 const alumnosApi    = useAlumnos()
@@ -94,6 +98,8 @@ const COL_MOD: Record<string, string> = { PART: '#1e3a8a', GRUPAL: '#9d174d', MA
 
 <template>
   <div class="d-flex flex-column ga-4">
+    <SoloLectura modulo="asistencia" detalle="pasar lista" />
+
     <v-row dense>
       <!-- Escáner -->
       <v-col cols="12" md="5">
@@ -120,6 +126,7 @@ const COL_MOD: Record<string, string> = { PART: '#1e3a8a', GRUPAL: '#9d174d', MA
             <v-alert v-if="camError" type="error" density="compact" variant="tonal" rounded="lg" class="mt-3">{{ camError }}</v-alert>
 
             <v-btn
+              v-if="puedeEditar"
               :color="escaneando ? 'error' : 'primary'"
               variant="flat" rounded="lg" block class="mt-3"
               :prepend-icon="escaneando ? 'mdi-camera-off' : 'mdi-camera'"
@@ -152,7 +159,7 @@ const COL_MOD: Record<string, string> = { PART: '#1e3a8a', GRUPAL: '#9d174d', MA
                 placeholder="Buscar alumno…"
                 density="compact" variant="outlined" rounded="lg" hide-details
               />
-              <v-btn color="primary" variant="flat" rounded="lg" :disabled="!manualSel" :loading="procesando" @click="marcarManual">
+              <v-btn v-if="puedeEditar" color="primary" variant="flat" rounded="lg" :disabled="!manualSel" :loading="procesando" @click="marcarManual">
                 Marcar
               </v-btn>
             </div>

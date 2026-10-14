@@ -27,4 +27,13 @@ interface ReposicionRepository
 
     /** Marca como 'vencida' los comodines pendientes cuya vigencia ya pasó. */
     public function vencerCaducados(): int;
+
+    /**
+     * Marca como 'tomada' las reposiciones agendadas cuya fecha ya pasó: así
+     * salen solas del pizarrón sin que nadie tenga que limpiarlas.
+     */
+    public function marcarTomadas(): int;
+
+    /** Faltas (fecha_falta) de la semana, para pintarlas en el pizarrón. */
+    public function faltasEnSemana(string $sucursalId, string $lunes, string $sabado): array;
 }

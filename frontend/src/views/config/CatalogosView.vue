@@ -3,6 +3,10 @@ import { ref, onMounted } from 'vue'
 import { useAlumnos, type PlanCatalogo } from '@/composables/useAlumnos'
 import { useModalidades, type Modalidad } from '@/composables/useModalidades'
 import { useSwal } from '@/composables/useSwal'
+import { usePermisos } from '@/composables/usePermisos'
+import SoloLectura from '@/components/SoloLectura.vue'
+
+const { puedeEditar } = usePermisos('catalogos')
 
 const alumnos = useAlumnos()
 const modApi  = useModalidades()
@@ -101,6 +105,8 @@ const fmt = (n: number) =>
 
 <template>
   <div class="d-flex flex-column ga-4">
+    <SoloLectura modulo="catalogos" detalle="cambiar los precios" />
+
     <v-card rounded="xl" border>
       <!-- Header -->
       <div style="background:linear-gradient(135deg,#e8f4ff,#dbeafe);padding:20px 24px;border-radius:16px 16px 0 0;border-bottom:1px solid #b8d4ff">
@@ -122,6 +128,7 @@ const fmt = (n: number) =>
             <span style="font-size:12px;color:#9ca3af">{{ mod.label }}</span>
             <div style="height:1px;flex:1;background:#e5e7eb" />
             <v-btn
+              v-if="puedeEditar"
               size="x-small" variant="tonal" color="primary" rounded="lg"
               prepend-icon="mdi-plus"
               @click="abrirNuevo(mod.clave)"
@@ -149,10 +156,10 @@ const fmt = (n: number) =>
                 <td style="font-weight:700;color:#15803d;font-size:15px">{{ fmt(plan.mensualidad) }}</td>
                 <td>
                   <div class="d-flex ga-1 justify-end">
-                    <v-btn icon size="x-small" variant="text" color="primary" @click="abrirEditar(plan)">
+                    <v-btn v-if="puedeEditar" icon size="x-small" variant="text" color="primary" @click="abrirEditar(plan)">
                       <v-icon>mdi-pencil-outline</v-icon>
                     </v-btn>
-                    <v-btn icon size="x-small" variant="text" color="error" @click="eliminar(plan)">
+                    <v-btn v-if="puedeEditar" icon size="x-small" variant="text" color="error" @click="eliminar(plan)">
                       <v-icon>mdi-delete-outline</v-icon>
                     </v-btn>
                   </div>

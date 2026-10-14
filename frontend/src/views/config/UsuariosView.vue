@@ -1,15 +1,17 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import { useUsuarios, rolInfo, ROLES, type Usuario } from '@/composables/useUsuarios'
 import { useSwal } from '@/composables/useSwal'
 
 const { exito, confirmar } = useSwal()
 
-const { listar, crear, actualizar } = useUsuarios()
+const { listar, crear, actualizar, eliminar } = useUsuarios()
 
 const usuarios  = ref<Usuario[]>([])
 const cargando  = ref(true)
 const error     = ref('')
+/** Mostrar también a los dados de baja, para reactivarlos o eliminarlos. */
+const verInactivos = ref(false)
 
 // ── Modal ─────────────────────────────────────────────────────────────────
 const dialog      = ref(false)
@@ -31,11 +33,12 @@ const form = ref(formVacio())
 // ── Carga ─────────────────────────────────────────────────────────────────
 async function cargar() {
   cargando.value = true; error.value = ''
-  try { usuarios.value = await listar() }
+  try { usuarios.value = await listar(verInactivos.value) }
   catch (e: any) { error.value = e.message }
   finally { cargando.value = false }
 }
 onMounted(cargar)
+watch(verInactivos, cargar)
 
 // ── Abrir modal ───────────────────────────────────────────────────────────
 function abrirNuevo() {
@@ -97,15 +100,49 @@ async function guardar() {
   }
 }
 
-// ── Desactivar usuario ────────────────────────────────────────────────────
+// ── Dar de baja / reactivar / eliminar ────────────────────────────────────
 async function desactivar(u: Usuario) {
   const { isConfirmed } = await confirmar(
-    '¿Desactivar este usuario?',
-    `${u.nombre} perderá acceso al sistema y dejará de aparecer en el listado.`,
+    '¿Dar de baja a este usuario?',
+    `${u.nombre} perderá el acceso. Podrás reactivarlo después activando «Ver dados de baja».`,
   )
   if (!isConfirmed) return
-  await actualizar(u.id, { activo: false })
-  await cargar()
+  try {
+    await actualizar(u.id, { activo: false })
+    await cargar()
+    exito('Usuario dado de baja', `${u.nombre} ya no puede entrar al sistema.`)
+  } catch (e: any) { error.value = e.message }
+}
+
+async function reactivar(u: Usuario) {
+  const { isConfirmed } = await confirmar(
+    '¿Reactivar este usuario?',
+    `${u.nombre} volverá a entrar con su rol de ${rolInfo(u.rol).label} y su contraseña anterior.`,
+  )
+  if (!isConfirmed) return
+  try {
+    await actualizar(u.id, { activo: true })
+    await cargar()
+    exito('Usuario reactivado', `${u.nombre} ya puede entrar de nuevo.`)
+  } catch (e: any) { error.value = e.message }
+}
+
+/**
+ * Borrado definitivo. El servidor solo lo permite en inactivos que no dejaron
+ * movimientos: quien cobró, condonó o declaró un día inhábil se queda como
+ * inactivo, porque esos registros deben seguir diciendo quién los hizo.
+ */
+async function borrar(u: Usuario) {
+  const { isConfirmed } = await confirmar(
+    '¿Eliminar definitivamente?',
+    `Se borrará el usuario de ${u.nombre} y su correo quedará libre para volver a usarse. Esto no se puede deshacer.`,
+  )
+  if (!isConfirmed) return
+  try {
+    await eliminar(u.id)
+    await cargar()
+    exito('Usuario eliminado', `El correo ${u.email} queda libre.`)
+  } catch (e: any) { error.value = e.message }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -126,10 +163,19 @@ const reglasEmail = [
     <!-- Toolbar -->
     <v-card rounded="xl" border>
       <v-card-text class="pa-4">
-        <div class="d-flex align-center justify-space-between">
+        <div class="d-flex align-center flex-wrap ga-3">
           <div style="font-size:13px;color:#6b7280">
             Gestiona los accesos y roles del equipo
           </div>
+          <v-spacer />
+          <v-switch
+            v-model="verInactivos"
+            label="Ver dados de baja"
+            color="primary"
+            density="compact"
+            hide-details
+            style="flex:0 0 auto"
+          />
           <v-btn color="primary" prepend-icon="mdi-plus" rounded="lg" @click="abrirNuevo">
             Nuevo usuario
           </v-btn>
@@ -199,16 +245,40 @@ const reglasEmail = [
             <!-- Acciones -->
             <td>
               <div class="d-flex ga-1 justify-end">
-                <v-btn icon size="x-small" variant="text" color="primary" @click="abrirEditar(u)">
+                <v-btn icon size="x-small" variant="text" color="primary" title="Editar" @click="abrirEditar(u)">
                   <v-icon>mdi-pencil-outline</v-icon>
                 </v-btn>
+
+                <!-- Activo: se puede dar de baja -->
                 <v-btn
+                  v-if="u.activo"
                   icon size="x-small" variant="text"
-                  color="grey" title="Desactivar"
+                  color="grey" title="Dar de baja"
                   @click="desactivar(u)"
                 >
                   <v-icon>mdi-account-off-outline</v-icon>
                 </v-btn>
+
+                <!-- Inactivo: reactivar, y borrar si no dejó movimientos -->
+                <template v-else>
+                  <v-btn
+                    icon size="x-small" variant="text"
+                    color="success" title="Reactivar"
+                    @click="reactivar(u)"
+                  >
+                    <v-icon>mdi-account-reactivate-outline</v-icon>
+                  </v-btn>
+                  <v-btn
+                    icon size="x-small" variant="text" color="error"
+                    :disabled="!u.puedeEliminarse"
+                    :title="u.puedeEliminarse
+                      ? 'Eliminar definitivamente'
+                      : 'No se puede eliminar: tiene movimientos a su nombre'"
+                    @click="borrar(u)"
+                  >
+                    <v-icon>mdi-trash-can-outline</v-icon>
+                  </v-btn>
+                </template>
               </div>
             </td>
           </tr>

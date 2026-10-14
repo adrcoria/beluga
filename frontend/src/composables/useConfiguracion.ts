@@ -4,6 +4,8 @@ export interface Configuracion {
   horario_grid_inicio?: string
   horario_grid_fin?: string
   horario_cupo_grupal?: string
+  /** Horas de anticipación mínimas para que una falta dé derecho a reposición. */
+  ausencia_horas_aviso?: string
   [key: string]: string | undefined
 }
 

@@ -20,6 +20,13 @@ class ListarUsuariosAction extends Action
 
     protected function action(): Response
     {
-        return $this->json($this->repo->listar());
+        // ?inactivos=1 para ver también a los dados de baja, y poder
+        // reactivarlos o eliminarlos.
+        $incluirInactivos = filter_var(
+            $this->getQueryParam('inactivos', false),
+            FILTER_VALIDATE_BOOLEAN
+        );
+
+        return $this->json($this->repo->listar($incluirInactivos));
     }
 }

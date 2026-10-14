@@ -9,8 +9,17 @@ export interface Instructor {
   niveles: string[]
   sucursales: string[]
   activo: boolean
+  /**
+   * Horario real del maestro: un rango por día. Sin días = sin restricción.
+   * Un día ausente del mapa significa que no viene ese día.
+   */
+  horarioPorDia: Record<string, { horaInicio: string; horaFin: string }>
+  /** @deprecated Rango único de la etapa anterior. La fuente de verdad es horarioPorDia. */
   dispHoraInicio?: string | null
+  /** @deprecated Ver horarioPorDia */
   dispHoraFin?: string | null
+  /** @deprecated Ver horarioPorDia */
+  diasAsiste?: string[]
 }
 
 export function useInstructores() {

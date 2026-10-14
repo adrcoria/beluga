@@ -26,9 +26,11 @@ class CrearUsuarioAction extends Action
             return $this->error('nombre, email y rol son requeridos', 422);
         }
 
-        $rolesValidos = ['administrador', 'gerencia', 'operativo'];
+        // La lista de roles vive en config/permisos.php, que se genera de la
+        // matriz del cliente: así no hay dos lugares que puedan discrepar.
+        $rolesValidos = (require __DIR__ . '/../../../../config/permisos.php')['roles'];
         if (!in_array($body['rol'], $rolesValidos, true)) {
-            return $this->error('Rol no válido', 422);
+            return $this->error('Rol no válido. Opciones: ' . implode(', ', $rolesValidos), 422);
         }
 
         try {

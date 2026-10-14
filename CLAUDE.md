@@ -180,11 +180,34 @@ Copiar `backend/.env.example` → `backend/.env` y ajustar antes de `composer in
 - Un alumno con plan 3x/sem puede tener hasta 3 instructores distintos en la semana
 - Ejemplo real: gemelos Rodrigo y Patricio (PART 3x/sem) → Lunes 4PM/Brisa, Miércoles 7PM/Edgardo, Viernes 5PM/Karla
 
-### Reposiciones automáticas (solo por día inhábil)
-- Las reposiciones son **automáticas y colectivas**, nunca por ausencia individual
+### Reposiciones
+
+Hay dos orígenes, y se comportan distinto:
+
+**1. Día inhábil (colectivo y automático)**
 - Al declarar día inhábil: el sistema identifica todos los alumnos con asignación ese día y busca slot compatible en los **siguientes 14 días**
-- Una ausencia individual no genera reposición — el alumno pierde esa clase
-- Las reposiciones se marcan visualmente distinto (color naranja + borde `#EA580C`)
+- No depende de nada que haga el alumno
+
+**2. Falta avisada con anticipación (individual)**
+- Si el alumno avisa que no viene **con la anticipación mínima**, la falta le da derecho a una reposición y el comodín se genera solo, ligado a esa falta
+- El umbral vive en `configuracion.ausencia_horas_aviso` (default **2 horas**) y es configurable desde la UI
+- Si avisa con menos de ese margen, **pierde la clase**: no se genera nada
+- El veredicto se guarda en la falta (`con_derecho` + `umbral_horas`): cambiar el parámetro **no** reabre faltas ya resueltas
+- Anular una falta cancela su comodín, salvo que el alumno ya lo haya tomado (`estado = 'tomada'`)
+
+**Candados al agendar una reposición**
+- No se puede agendar en una fecha que ya pasó
+- No se puede agendar si el alumno tiene la mensualidad vencida
+
+Las reposiciones se marcan visualmente distinto (color naranja + borde `#EA580C`).
+
+### Prealumnos y clase muestra
+- Un **prealumno** es un alumno con `status = 'prueba'`. No hay catálogo aparte a propósito: el buzón de prospectos es el módulo premium 11
+- Al darlo de alta **no se le genera ningún cobro** (ni inscripción ni mensualidad). Se captura `notas` (de dónde llegó, qué le interesa)
+- La clase muestra se agenda en el Calendario como un bloque de **una sola fecha** con `es_muestra = 1`. Al crearla se estampa `alumnos.fecha_clase_muestra`
+- Una clase muestra es un visitante en una celda libre: va por alumno aunque la modalidad sea grupal, y **no** se integra al grupo
+- Al pasar de `prueba` a `activo` (se inscribió) el sistema le genera la inscripción y la primera mensualidad
+- `fecha_clase_muestra` se conserva al inscribirse: es con lo que el reporte mide **cuántos de los que probaron se quedaron**
 
 ### Descuentos con motivo
 - Cada descuento guarda `porcentaje + motivo` (texto libre)

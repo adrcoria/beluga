@@ -3,6 +3,8 @@ import { useApi } from './useApi'
 export interface Cobro {
   id: string
   alumnoFolio: string
+  programaId?: string | null
+  programaModalidad?: string | null
   concepto: 'mensualidad' | 'inscripcion'
   alumnoNombre: string
   alumnoFoto?: string
@@ -13,9 +15,22 @@ export interface Cobro {
   saldoFavorAplicado: number
   montoNeto: number
   montoPagado: number
-  estado: 'pendiente' | 'parcial' | 'pagado'
+  estado: 'pendiente' | 'parcial' | 'pagado' | 'condonado'
+  /** Por qué no se cobró este mes. Solo viene en los condonados. */
+  motivoNoCobro?: string | null
   requiereFactura: boolean
   facturaRealizada: boolean
+  /** ¿El alumno ya tiene datos fiscales capturados? Para avisar antes de cobrar. */
+  alumnoTieneDatosFiscales: boolean
+  /** Copia congelada de los datos fiscales con los que se pidió la factura */
+  datosFactura?: {
+    razonSocial:   string
+    rfc:           string
+    regimenFiscal: string | null
+    usoCfdi:       string | null
+    codigoPostal:  string | null
+    email:         string | null
+  } | null
   periodoDesde: string
   periodoHasta: string
   generadoEn: string
@@ -54,6 +69,11 @@ export function useCobranza() {
     return api.post(`/api/cobros/${id}/abonos`, datos)
   }
 
+  // Pago adelantado de un programa (N meses), aunque no tenga cobros pendientes
+  function registrarPagoAdelantado(datos: { programaId: string; meses: number; metodo: string; sucursalId: string; requiereFactura?: boolean }): Promise<Cobro> {
+    return api.post('/api/cobros/adelantado', datos)
+  }
+
   function marcarFactura(id: string, datos: { requiereFactura?: boolean; facturaRealizada?: boolean }): Promise<Cobro> {
     return api.put(`/api/cobros/${id}/factura`, datos)
   }
@@ -66,5 +86,16 @@ export function useCobranza() {
     return api.get(`/api/cobros/${cobroId}/pagos`)
   }
 
-  return { listar, obtener, registrarAbono, marcarFactura, generarCobros, pagosDe }
+  // "No pedir cobro": condona el mes. Se da por cubierto y el vencimiento avanza.
+  function condonar(id: string, motivo: string): Promise<Cobro> {
+    return api.post(`/api/cobros/${id}/condonar`, { motivo })
+  }
+
+  // El ticket se imprime en el cliente (utils/ticket58.ts) por el diálogo del
+  // navegador; el backend no tiene endpoint de impresión.
+
+  return {
+    listar, obtener, registrarAbono, registrarPagoAdelantado, marcarFactura,
+    generarCobros, pagosDe, condonar,
+  }
 }

@@ -22,4 +22,20 @@ interface HorarioRepository
 
     /** Horario semanal vigente (hoy) de un alumno, directo o vía grupo. */
     public function porAlumno(string $folio): array;
+
+    /**
+     * Libera los lugares de un alumno a partir de `$desde`: cierra sus reglas
+     * vigentes y borra las que aún no empezaban. Con `$programaId` solo toca las
+     * de ese programa; sin él, todas. Devuelve cuántas afectó.
+     *
+     * Las semanas anteriores conservan el historial: el pizarrón filtra por
+     * vigencia, no borra.
+     */
+    public function liberarDeAlumno(string $folio, string $desde, ?string $programaId = null): int;
+
+    /**
+     * Saca al alumno de sus grupos. Con `$modalidad` solo de los grupos que
+     * tienen clases de esa modalidad; sin ella, de todos.
+     */
+    public function quitarDeGrupos(string $folio, ?string $modalidad = null): int;
 }

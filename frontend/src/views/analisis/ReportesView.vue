@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import * as XLSX from 'xlsx'
-import { useReportes, type Ingresos, type Cartera, type AsistenciaReporte, type Ocupacion } from '@/composables/useReportes'
+import {
+  useReportes,
+  type Ingresos, type Cartera, type AsistenciaReporte, type Ocupacion,
+  type ReposicionesReporte, type PrealumnosReporte,
+} from '@/composables/useReportes'
 import { useSucursalStore } from '@/stores/sucursal'
 import { useSwal } from '@/composables/useSwal'
 
@@ -20,6 +24,10 @@ const ingresos    = ref<Ingresos | null>(null)
 const cartera     = ref<Cartera | null>(null)
 const asistencia  = ref<AsistenciaReporte | null>(null)
 const ocupacion   = ref<Ocupacion | null>(null)
+const reposiciones = ref<ReposicionesReporte | null>(null)
+const prealumnos   = ref<PrealumnosReporte | null>(null)
+/** Filtro del reporte de reposiciones: '' todas · 'si' con derecho · 'no' sin derecho */
+const filtroDerecho = ref('')
 
 const fmt = (n: number) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', minimumFractionDigits: 0 }).format(n)
 const fmtFecha = (f?: string | null) => f ? new Date(f + 'T12:00:00').toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'
@@ -33,6 +41,12 @@ async function cargar() {
     if (tab.value === 'cartera')    cartera.value    = await api.cartera(sucursalId.value)
     if (tab.value === 'asistencia') asistencia.value = await api.asistencia(sucursalId.value, desde.value, hasta.value)
     if (tab.value === 'ocupacion')  ocupacion.value  = await api.ocupacion(sucursalId.value)
+    if (tab.value === 'reposiciones') {
+      reposiciones.value = await api.reposiciones(sucursalId.value, desde.value, hasta.value, filtroDerecho.value)
+    }
+    if (tab.value === 'prealumnos') {
+      prealumnos.value = await api.prealumnos(sucursalId.value, desde.value, hasta.value)
+    }
   } catch (e: any) {
     notifError('Error al cargar el reporte', e.message)
   } finally {
@@ -42,6 +56,7 @@ async function cargar() {
 
 watch(tab, cargar)
 watch(sucursalId, cargar)
+watch(filtroDerecho, cargar)
 onMounted(cargar)
 
 // Exportar un arreglo de objetos a Excel
@@ -76,6 +91,33 @@ function exportarOcupacion() {
   })), 'ocupacion_instructores')
 }
 
+function exportarReposiciones() {
+  exportar((reposiciones.value?.faltas ?? []).map(f => ({
+    Alumno:     f.alumnoNombre,
+    Folio:      f.alumnoFolio,
+    Fecha:      f.fecha,
+    Hora:       f.horaClase,
+    'Avisó con (h)': f.horasAviso,
+    Derecho:    f.conDerecho ? 'Con derecho' : 'Sin derecho',
+    'Mínimo exigido (h)': f.umbralHoras,
+    Reposición: f.reposicionEstado ?? '',
+    Motivo:     f.motivo ?? '',
+  })), 'reposiciones')
+}
+
+function exportarPrealumnos() {
+  exportar((prealumnos.value?.prealumnos ?? []).map(p => ({
+    Folio:     p.folio,
+    Nombre:    p.nombre,
+    Teléfono:  p.telefono,
+    Tutor:     p.tutor ?? '',
+    Correo:    p.email ?? '',
+    Modalidad: p.modalidad,
+    'Clase muestra': p.fechaClaseMuestra ?? 'Sin agendar',
+    Notas:     p.notas ?? '',
+  })), 'prealumnos')
+}
+
 const maxDia = computed(() => Math.max(1, ...(asistencia.value?.porDia.map(d => d.total) ?? [1])))
 </script>
 
@@ -86,6 +128,8 @@ const maxDia = computed(() => Math.max(1, ...(asistencia.value?.porDia.map(d => 
       <v-tab value="cartera">Cartera vencida</v-tab>
       <v-tab value="asistencia">Asistencia</v-tab>
       <v-tab value="ocupacion">Ocupación</v-tab>
+      <v-tab value="reposiciones">Reposiciones</v-tab>
+      <v-tab value="prealumnos">Prealumnos</v-tab>
     </v-tabs>
 
     <!-- Filtro de fechas (ingresos y asistencia) -->
@@ -246,6 +290,159 @@ const maxDia = computed(() => Math.max(1, ...(asistencia.value?.porDia.map(d => 
               <td style="font-size:13px;color:#0a1e6e;font-weight:600">{{ i.nombre }}</td>
               <td class="text-right">{{ i.clases }}</td>
               <td class="text-right" style="font-weight:700;color:#0a1e6e">{{ i.alumnos }}</td>
+            </tr>
+          </tbody>
+        </v-table>
+      </v-card>
+    </template>
+
+    <!-- ── Reposiciones: con derecho y sin derecho ─────────────────────────── -->
+    <template v-else-if="tab === 'reposiciones' && reposiciones">
+      <v-row dense>
+        <v-col cols="6" sm="3">
+          <v-card rounded="xl" border><v-card-text class="pa-4">
+            <div class="lbl">Faltas avisadas</div>
+            <div class="num" style="color:#0a1e6e">{{ reposiciones.resumen.total }}</div>
+          </v-card-text></v-card>
+        </v-col>
+        <v-col cols="6" sm="3">
+          <v-card rounded="xl" border><v-card-text class="pa-4">
+            <div class="lbl">Con derecho</div>
+            <div class="num" style="color:#15803d">{{ reposiciones.resumen.conDerecho }}</div>
+            <div class="sub">Generaron reposición</div>
+          </v-card-text></v-card>
+        </v-col>
+        <v-col cols="6" sm="3">
+          <v-card rounded="xl" border><v-card-text class="pa-4">
+            <div class="lbl">Sin derecho</div>
+            <div class="num" style="color:#d97706">{{ reposiciones.resumen.sinDerecho }}</div>
+            <div class="sub">Avisaron tarde</div>
+          </v-card-text></v-card>
+        </v-col>
+        <v-col cols="6" sm="3">
+          <v-card rounded="xl" border><v-card-text class="pa-4">
+            <div class="lbl">Por usar</div>
+            <div class="num" style="color:#1a3fe8">{{ reposiciones.resumen.porUsar }}</div>
+            <div class="sub">Clases que se deben</div>
+          </v-card-text></v-card>
+        </v-col>
+      </v-row>
+
+      <v-card rounded="xl" border>
+        <div class="d-flex flex-wrap align-center ga-2 pa-3" style="border-bottom:1px solid #f1f5f9">
+          <span class="lbl">Detalle · el mínimo para tener derecho es {{ reposiciones.umbralHoras }} h de aviso</span>
+          <v-spacer />
+          <v-chip
+            v-for="f in [{ v:'', l:'Todas' }, { v:'si', l:'Con derecho' }, { v:'no', l:'Sin derecho' }]"
+            :key="f.v"
+            size="small" style="cursor:pointer"
+            :color="filtroDerecho === f.v ? 'primary' : undefined"
+            :variant="filtroDerecho === f.v ? 'flat' : 'outlined'"
+            @click="filtroDerecho = f.v"
+          >{{ f.l }}</v-chip>
+          <v-btn size="small" variant="outlined" rounded="lg" prepend-icon="mdi-microsoft-excel" @click="exportarReposiciones">Excel</v-btn>
+        </div>
+        <v-table density="compact">
+          <thead>
+            <tr>
+              <th class="ch">Alumno</th>
+              <th class="ch">Clase que perdió</th>
+              <th class="ch text-right">Avisó con</th>
+              <th class="ch">Derecho</th>
+              <th class="ch">Reposición</th>
+              <th class="ch">Motivo</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="!reposiciones.faltas.length">
+              <td colspan="6" class="text-center py-10 text-medium-emphasis" style="font-size:14px">
+                Sin faltas registradas en el periodo
+              </td>
+            </tr>
+            <tr v-for="f in reposiciones.faltas" :key="f.id">
+              <td style="font-size:13px;color:#0a1e6e;font-weight:600">{{ f.alumnoNombre }}</td>
+              <td style="font-size:12px;color:#6b7280">{{ fmtFecha(f.fecha) }} · {{ f.horaClase }}</td>
+              <td class="text-right" style="font-size:12px">{{ f.horasAviso.toFixed(1) }} h</td>
+              <td>
+                <v-chip size="x-small" label variant="tonal" :color="f.conDerecho ? 'success' : 'warning'">
+                  {{ f.conDerecho ? 'Con derecho' : 'Sin derecho' }}
+                </v-chip>
+              </td>
+              <td style="font-size:12px;color:#6b7280">{{ f.reposicionEstado ?? '—' }}</td>
+              <td style="font-size:12px;color:#9ca3af">{{ f.motivo ?? '—' }}</td>
+            </tr>
+          </tbody>
+        </v-table>
+      </v-card>
+    </template>
+
+    <!-- ── Prealumnos ──────────────────────────────────────────────────────── -->
+    <template v-else-if="tab === 'prealumnos' && prealumnos">
+      <v-row dense>
+        <v-col cols="6" sm="3">
+          <v-card rounded="xl" border><v-card-text class="pa-4">
+            <div class="lbl">En prueba</div>
+            <div class="num" style="color:#0a1e6e">{{ prealumnos.resumen.enPrueba }}</div>
+          </v-card-text></v-card>
+        </v-col>
+        <v-col cols="6" sm="3">
+          <v-card rounded="xl" border><v-card-text class="pa-4">
+            <div class="lbl">Con clase agendada</div>
+            <div class="num" style="color:#15803d">{{ prealumnos.resumen.agendados }}</div>
+          </v-card-text></v-card>
+        </v-col>
+        <v-col cols="6" sm="3">
+          <v-card rounded="xl" border><v-card-text class="pa-4">
+            <div class="lbl">Sin agendar</div>
+            <div class="num" style="color:#d97706">{{ prealumnos.resumen.sinAgendar }}</div>
+            <div class="sub">Pendientes de seguimiento</div>
+          </v-card-text></v-card>
+        </v-col>
+        <v-col cols="6" sm="3">
+          <v-card rounded="xl" border><v-card-text class="pa-4">
+            <div class="lbl">Se inscribieron</div>
+            <div class="num" style="color:#1a3fe8">{{ prealumnos.resumen.convertidos }}</div>
+            <div class="sub">Probaron y se quedaron</div>
+          </v-card-text></v-card>
+        </v-col>
+      </v-row>
+
+      <v-card rounded="xl" border>
+        <div class="d-flex align-center justify-space-between pa-3" style="border-bottom:1px solid #f1f5f9">
+          <span class="lbl">Detalle y notas</span>
+          <v-btn size="small" variant="outlined" rounded="lg" prepend-icon="mdi-microsoft-excel" @click="exportarPrealumnos">Excel</v-btn>
+        </div>
+        <v-table density="compact">
+          <thead>
+            <tr>
+              <th class="ch">Prealumno</th>
+              <th class="ch">Contacto</th>
+              <th class="ch">Clase muestra</th>
+              <th class="ch">Notas</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="!prealumnos.prealumnos.length">
+              <td colspan="4" class="text-center py-10 text-medium-emphasis" style="font-size:14px">
+                Sin prealumnos en el periodo
+              </td>
+            </tr>
+            <tr v-for="p in prealumnos.prealumnos" :key="p.folio">
+              <td>
+                <div style="font-size:13px;color:#0a1e6e;font-weight:600">{{ p.nombre }}</div>
+                <div style="font-size:11px;color:#9ca3af">#{{ p.folio }} · {{ p.modalidad }}</div>
+              </td>
+              <td style="font-size:12px;color:#6b7280">
+                {{ p.telefono }}
+                <div v-if="p.tutor" style="font-size:11px;color:#9ca3af">{{ p.tutor }}</div>
+              </td>
+              <td>
+                <v-chip v-if="p.agendado" size="x-small" label variant="tonal" color="success">
+                  {{ fmtFecha(p.fechaClaseMuestra) }}
+                </v-chip>
+                <span v-else style="font-size:12px;color:#d97706">Sin agendar</span>
+              </td>
+              <td style="font-size:12px;color:#6b7280;max-width:320px">{{ p.notas ?? '—' }}</td>
             </tr>
           </tbody>
         </v-table>

@@ -8,6 +8,10 @@ export interface Grupo {
   alumnos: { folio: string; nombre: string }[]
 }
 
+/** Modalidades que se asignan por grupo (no por alumno individual). */
+export const MODALIDADES_GRUPO = ['GRUPAL', 'MINI']
+export const esModalidadGrupo = (clave: string): boolean => MODALIDADES_GRUPO.includes(clave)
+
 export function useGrupos() {
   const api = useApi()
 

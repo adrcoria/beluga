@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { useGrupos, type Grupo } from '@/composables/useGrupos'
+import { useGrupos, esModalidadGrupo, type Grupo } from '@/composables/useGrupos'
 import { useAlumnos, type AlumnoResumen } from '@/composables/useAlumnos'
 import { useSwal } from '@/composables/useSwal'
 import { useSucursalStore } from '@/stores/sucursal'
@@ -34,7 +34,8 @@ async function cargar() {
   cargando.value = true
   try {
     grupos.value = await gruposApi.listar(sucursalId.value)
-    alumnosGrupal.value = await alumnosApi.listar({ modalidad: 'GRUPAL', status: 'activo' })
+    const activos = await alumnosApi.listar({ status: 'activo' })
+    alumnosGrupal.value = activos.filter(a => esModalidadGrupo(a.modalidad))
   } catch (e: any) {
     notifError('Error al cargar grupos', e.message)
   } finally {
@@ -101,7 +102,7 @@ async function eliminar(g: Grupo) {
       <div class="modal-head">
         <div>
           <div class="modal-eyebrow">Horarios · Grupos</div>
-          <div class="modal-title">Grupos GRUPAL</div>
+          <div class="modal-title">Grupos</div>
         </div>
         <v-btn icon="mdi-close" variant="text" color="#0a1e6e" @click="abierto = false" />
       </div>
@@ -124,7 +125,7 @@ async function eliminar(g: Grupo) {
                 label="Alumnos"
                 density="compact" variant="outlined" rounded="lg" hide-details
                 multiple chips closable-chips
-                no-data-text="Sin alumnos GRUPAL"
+                no-data-text="Sin alumnos de grupo (GRUPAL o MINI)"
               />
             </v-col>
           </v-row>

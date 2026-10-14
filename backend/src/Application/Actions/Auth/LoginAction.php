@@ -46,7 +46,7 @@ class LoginAction extends Action
             $token = JWT::encode([
                 'iss' => 'beluga-api',
                 'iat' => time(),
-                'exp' => time() + 86400 * 7,
+                'exp' => $this->tokenExp(), // caduca al cambio de día (medianoche Morelia)
                 'sub' => $usuario['id'],
                 'rol' => $usuario['rol'],
             ], $_ENV['JWT_SECRET'], 'HS256');

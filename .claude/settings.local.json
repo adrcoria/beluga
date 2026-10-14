@@ -37,7 +37,8 @@
       "PowerShell(Copy-Item -Force \"c:\\\\xampp\\\\htdocs\\\\beluga\\\\src\\\\Application\\\\Actions\\\\Alumnos\\\\CrearAlumnoAction.php\" \"c:\\\\Users\\\\cofa616206\\\\Documents\\\\beluga\\\\backend\\\\src\\\\Application\\\\Actions\\\\Alumnos\\\\CrearAlumnoAction.php\")",
       "PowerShell(& \"c:\\\\xampp\\\\php\\\\php.exe\" \"c:\\\\xampp\\\\php\\\\composer.phar\" dump-autoload --working-dir \"c:\\\\xampp\\\\htdocs\\\\beluga\")",
       "Bash(npm run *)",
-      "Bash(node -e \"console.log\\(require\\('crypto'\\).randomBytes\\(32\\).toString\\('hex'\\)\\)\")"
+      "Bash(node -e \"console.log\\(require\\('crypto'\\).randomBytes\\(32\\).toString\\('hex'\\)\\)\")",
+      "Bash(npx vue-tsc *)"
     ],
     "additionalDirectories": [
       "c:\\xampp\\htdocs\\beluga\\src\\Infrastructure\\Mail",

@@ -6,10 +6,130 @@ namespace Beluga\Infrastructure\Persistence\MySql;
 
 use Beluga\Domain\Instructor\InstructorRepository;
 use PDO;
+use RuntimeException;
 
 class InstructorMySqlRepository implements InstructorRepository
 {
+    private const DIAS = ['L' => 'lunes', 'M' => 'martes', 'X' => 'miércoles',
+                          'J' => 'jueves', 'V' => 'viernes', 'S' => 'sábado'];
+
     public function __construct(private readonly PDO $pdo) {}
+
+    public function disponibleEn(string $instructorId, string $dia, string $horaInicio, int $duracionMin): void
+    {
+        $stmt = $this->pdo->prepare('SELECT dia, hora_inicio, hora_fin FROM instructor_horario WHERE instructor_id = ?');
+        $stmt->execute([$instructorId]);
+        $horario = $stmt->fetchAll();
+
+        // Sin horario configurado no se restringe nada: es como trabajaba el
+        // sistema antes de que existiera esta tabla.
+        if (!$horario) {
+            return;
+        }
+
+        $delDia = null;
+        foreach ($horario as $h) {
+            if ($h['dia'] === $dia) { $delDia = $h; break; }
+        }
+
+        $nombre = $this->nombreDe($instructorId);
+
+        if ($delDia === null) {
+            $dias = array_map(fn($h) => self::DIAS[$h['dia']] ?? $h['dia'], $horario);
+            throw new RuntimeException(
+                "$nombre no trabaja los " . (self::DIAS[$dia] ?? $dia) . '. Solo viene: ' . implode(', ', $dias) . '.',
+                409
+            );
+        }
+
+        $ini = substr((string) $delDia['hora_inicio'], 0, 5);
+        $fin = substr((string) $delDia['hora_fin'], 0, 5);
+        $hf  = date('H:i', (int) strtotime($horaInicio) + $duracionMin * 60);
+
+        if ($horaInicio < $ini || $hf > $fin) {
+            throw new RuntimeException(
+                "$nombre solo está disponible los " . (self::DIAS[$dia] ?? $dia) . " de $ini a $fin.",
+                409
+            );
+        }
+    }
+
+    private function nombreDe(string $instructorId): string
+    {
+        $stmt = $this->pdo->prepare('SELECT nombre FROM instructores WHERE id = ?');
+        $stmt->execute([$instructorId]);
+        return (string) ($stmt->fetchColumn() ?: 'El instructor');
+    }
+
+    /** Horario por día del instructor, como mapa dia => {horaInicio, horaFin}. */
+    private function horarioPorDia(string $instructorId): array
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT dia, hora_inicio, hora_fin FROM instructor_horario
+             WHERE instructor_id = ? ORDER BY FIELD(dia,'L','M','X','J','V','S')"
+        );
+        $stmt->execute([$instructorId]);
+
+        $out = [];
+        foreach ($stmt->fetchAll() as $h) {
+            $out[$h['dia']] = [
+                'horaInicio' => substr((string) $h['hora_inicio'], 0, 5),
+                'horaFin'    => substr((string) $h['hora_fin'], 0, 5),
+            ];
+        }
+        return $out;
+    }
+
+    /** Reemplaza el horario del instructor por el que venga. */
+    private function guardarHorario(string $instructorId, array $horario): void
+    {
+        $this->pdo->prepare('DELETE FROM instructor_horario WHERE instructor_id = ?')->execute([$instructorId]);
+
+        $ins = $this->pdo->prepare(
+            'INSERT INTO instructor_horario (instructor_id, dia, hora_inicio, hora_fin) VALUES (?, ?, ?, ?)'
+        );
+        $dias = [];
+        $desde = null;
+        $hasta = null;
+
+        foreach ($horario as $dia => $rango) {
+            if (empty($rango['horaInicio']) || empty($rango['horaFin'])) continue;
+            if (!isset(self::DIAS[$dia]))                                continue;
+            if ($rango['horaFin'] <= $rango['horaInicio']) {
+                throw new RuntimeException(
+                    'En ' . self::DIAS[$dia] . ', la hora de salida debe ser posterior a la de entrada.',
+                    422
+                );
+            }
+            $ins->execute([$instructorId, $dia, $rango['horaInicio'], $rango['horaFin']]);
+
+            $dias[] = $dia;
+            $desde  = $desde === null ? $rango['horaInicio'] : min($desde, $rango['horaInicio']);
+            $hasta  = $hasta === null ? $rango['horaFin']    : max($hasta, $rango['horaFin']);
+        }
+
+        $this->sincronizarColumnasViejas($instructorId, $dias, $desde, $hasta);
+    }
+
+    /**
+     * Mantiene al día `disp_hora_inicio`/`disp_hora_fin`/`dias_asiste` como el
+     * resumen del horario por día (la franja que abarca y los días que viene).
+     *
+     * Ya nada del backend las lee, pero el frontend que está desplegado sí:
+     * mientras no se suba la versión nueva, sin esto un maestro editado con el
+     * horario por día se vería como disponible a toda hora allá.
+     */
+    private function sincronizarColumnasViejas(string $instructorId, array $dias, ?string $desde, ?string $hasta): void
+    {
+        $this->pdo->prepare(
+            'UPDATE instructores SET disp_hora_inicio = :dhi, disp_hora_fin = :dhf, dias_asiste = :dias WHERE id = :id'
+        )->execute([
+            ':dhi'  => $desde,
+            ':dhf'  => $hasta,
+            ':dias' => json_encode($dias),
+            ':id'   => $instructorId,
+        ]);
+    }
 
     public function listar(?string $sucursalId = null, bool $todos = false): array
     {
@@ -27,7 +147,7 @@ class InstructorMySqlRepository implements InstructorRepository
         $whereClause = $where ? 'WHERE ' . implode(' AND ', $where) : '';
 
         $sql = "SELECT i.id, i.nombre, i.iniciales, i.telefono, i.email, i.sucursales, i.activo,
-                       i.disp_hora_inicio, i.disp_hora_fin,
+                       i.disp_hora_inicio, i.disp_hora_fin, i.dias_asiste,
                        GROUP_CONCAT(im.modalidad_clave ORDER BY im.modalidad_clave SEPARATOR ',') AS modalidades_raw
                 FROM instructores i
                 LEFT JOIN instructor_modalidades im ON im.instructor_id = i.id
@@ -45,7 +165,7 @@ class InstructorMySqlRepository implements InstructorRepository
     {
         $stmt = $this->pdo->prepare(
             "SELECT i.id, i.nombre, i.iniciales, i.telefono, i.email, i.sucursales, i.activo,
-                    i.disp_hora_inicio, i.disp_hora_fin,
+                    i.disp_hora_inicio, i.disp_hora_fin, i.dias_asiste,
                     GROUP_CONCAT(im.modalidad_clave ORDER BY im.modalidad_clave SEPARATOR ',') AS modalidades_raw
              FROM instructores i
              LEFT JOIN instructor_modalidades im ON im.instructor_id = i.id
@@ -63,9 +183,11 @@ class InstructorMySqlRepository implements InstructorRepository
 
         $this->pdo->beginTransaction();
         try {
+            // Las columnas del rango único ya no se reciben: las deriva
+            // guardarHorario() a partir del horario por día.
             $this->pdo->prepare(
-                'INSERT INTO instructores (id, nombre, iniciales, telefono, email, sucursales, disp_hora_inicio, disp_hora_fin)
-                 VALUES (:id, :nombre, :iniciales, :telefono, :email, :sucursales, :dhi, :dhf)'
+                'INSERT INTO instructores (id, nombre, iniciales, telefono, email, sucursales)
+                 VALUES (:id, :nombre, :iniciales, :telefono, :email, :sucursales)'
             )->execute([
                 ':id'         => $id,
                 ':nombre'     => $datos['nombre'],
@@ -73,11 +195,10 @@ class InstructorMySqlRepository implements InstructorRepository
                 ':telefono'   => $datos['telefono']  ?? '',
                 ':email'      => $datos['email']     ?? null,
                 ':sucursales' => json_encode($datos['sucursales'] ?? []),
-                ':dhi'        => $datos['dispHoraInicio'] ?: null,
-                ':dhf'        => $datos['dispHoraFin']    ?: null,
             ]);
 
             $this->sincronizarModalidades($id, $datos['niveles'] ?? []);
+            $this->guardarHorario($id, $datos['horarioPorDia'] ?? []);
 
             $this->pdo->commit();
         } catch (\Throwable $e) {
@@ -95,8 +216,7 @@ class InstructorMySqlRepository implements InstructorRepository
             $this->pdo->prepare(
                 'UPDATE instructores
                  SET nombre=:nombre, iniciales=:iniciales, telefono=:telefono,
-                     email=:email, sucursales=:sucursales, activo=:activo,
-                     disp_hora_inicio=:dhi, disp_hora_fin=:dhf
+                     email=:email, sucursales=:sucursales, activo=:activo
                  WHERE id=:id'
             )->execute([
                 ':id'         => $id,
@@ -106,11 +226,14 @@ class InstructorMySqlRepository implements InstructorRepository
                 ':email'      => $datos['email']     ?? null,
                 ':sucursales' => json_encode($datos['sucursales'] ?? []),
                 ':activo'     => ($datos['activo'] ?? true) ? 1 : 0,
-                ':dhi'        => $datos['dispHoraInicio'] ?: null,
-                ':dhf'        => $datos['dispHoraFin']    ?: null,
             ]);
 
             $this->sincronizarModalidades($id, $datos['niveles'] ?? []);
+            // Solo se toca si viene en la petición: así una actualización parcial
+            // (p. ej. desactivar al maestro) no le borra el horario sin querer.
+            if (array_key_exists('horarioPorDia', $datos)) {
+                $this->guardarHorario($id, $datos['horarioPorDia']);
+            }
 
             $this->pdo->commit();
         } catch (\Throwable $e) {
@@ -153,8 +276,14 @@ class InstructorMySqlRepository implements InstructorRepository
             'niveles'    => $row['modalidades_raw'] ? explode(',', $row['modalidades_raw']) : [],
             'sucursales' => json_decode($row['sucursales'], true),
             'activo'     => (bool) $row['activo'],
+            // Horario real: un rango por día. Vacío = sin restricción.
+            'horarioPorDia'  => $this->horarioPorDia($row['id']),
+            // Campos de la etapa anterior (rango único + días). Se siguen
+            // devolviendo mientras haya pantallas viejas leyéndolos; la fuente
+            // de verdad es `horarioPorDia`.
             'dispHoraInicio' => $row['disp_hora_inicio'] ? substr((string) $row['disp_hora_inicio'], 0, 5) : null,
             'dispHoraFin'    => $row['disp_hora_fin']    ? substr((string) $row['disp_hora_fin'], 0, 5)    : null,
+            'diasAsiste'     => !empty($row['dias_asiste']) ? json_decode($row['dias_asiste'], true) : [],
         ];
     }
 

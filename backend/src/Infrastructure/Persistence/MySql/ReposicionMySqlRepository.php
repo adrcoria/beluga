@@ -4,17 +4,22 @@ declare(strict_types=1);
 
 namespace Beluga\Infrastructure\Persistence\MySql;
 
+use Beluga\Domain\Instructor\InstructorRepository;
 use Beluga\Domain\Reposicion\ReposicionRepository;
 use PDO;
 use RuntimeException;
 
 class ReposicionMySqlRepository implements ReposicionRepository
 {
-    public function __construct(private readonly PDO $pdo) {}
+    public function __construct(
+        private readonly PDO $pdo,
+        private readonly InstructorRepository $instructores
+    ) {}
 
     public function listar(string $sucursalId, ?string $estado = null): array
     {
         $this->vencerCaducados();
+        $this->marcarTomadas();
 
         $sql = "SELECT r.*, a.nombre AS alumno_nombre, a.modalidad AS alumno_modalidad,
                        i.nombre AS instructor_nombre, i.iniciales AS instructor_iniciales
@@ -56,13 +61,18 @@ class ReposicionMySqlRepository implements ReposicionRepository
         $id    = $this->uuid();
 
         $this->pdo->prepare(
-            'INSERT INTO reposiciones (id, alumno_folio, sucursal_id, motivo, origen, estado, vence)
-             VALUES (:id, :folio, :suc, :motivo, \'manual\', \'pendiente\', :vence)'
+            'INSERT INTO reposiciones (id, alumno_folio, sucursal_id, motivo, fecha_falta, origen, estado, vence)
+             VALUES (:id, :folio, :suc, :motivo, :falta, :origen, \'pendiente\', :vence)'
         )->execute([
             ':id'     => $id,
             ':folio'  => $datos['alumnoFolio'],
             ':suc'    => $datos['sucursalId'],
             ':motivo' => $datos['motivo'] ?? null,
+            // Qué día faltó: es lo que el pizarrón pinta para ubicar la clase
+            // que se está reponiendo.
+            ':falta'  => $datos['fechaFalta'] ?? null,
+            // 'ausencia' cuando la generó una falta avisada a tiempo
+            ':origen' => $datos['origen'] ?? 'manual',
             ':vence'  => $vence,
         ]);
 
@@ -80,6 +90,29 @@ class ReposicionMySqlRepository implements ReposicionRepository
         }
 
         $fecha = $cambios['fecha'];
+
+        // Candado: una clase no se puede agendar en un día que ya pasó
+        if ($fecha < date('Y-m-d')) {
+            throw new RuntimeException('No se puede agendar en una fecha que ya pasó', 409);
+        }
+
+        // Candado: quien debe mensualidad no puede tomar reposiciones. Se avisa
+        // con el detalle para que la caja sepa qué cobrar.
+        $deuda = $this->pdo->prepare(
+            "SELECT MIN(pr.vencimiento) AS vencimiento
+             FROM alumno_programas pr
+             WHERE pr.alumno_folio = ? AND pr.status = 'activo' AND pr.vencimiento < CURDATE()"
+        );
+        $deuda->execute([$rep['alumnoFolio']]);
+        if ($vencido = $deuda->fetchColumn()) {
+            $dias = (int) ((strtotime(date('Y-m-d')) - strtotime((string) $vencido)) / 86400);
+            throw new RuntimeException(
+                "{$rep['alumnoNombre']} tiene la mensualidad vencida desde el $vencido ($dias días). "
+                . 'Hay que ponerse al corriente antes de agendar la reposición.',
+                409
+            );
+        }
+
         $datos = [
             'instructorId' => $cambios['instructorId'],
             'fecha'        => $fecha,
@@ -125,6 +158,10 @@ class ReposicionMySqlRepository implements ReposicionRepository
 
     public function agendadasEnSemana(string $sucursalId, string $lunes, string $sabado): array
     {
+        // Antes de armar el pizarrón se limpian las que ya se tomaron: así la
+        // celda se libera sola en cuanto pasa la fecha.
+        $this->marcarTomadas();
+
         $stmt = $this->pdo->prepare(
             "SELECT r.id, r.alumno_folio, r.fecha, r.hora_inicio, r.duracion_min, r.motivo,
                     r.instructor_id, a.nombre AS alumno_nombre, a.modalidad AS alumno_modalidad,
@@ -174,23 +211,49 @@ class ReposicionMySqlRepository implements ReposicionRepository
         return $stmt->rowCount();
     }
 
+    public function marcarTomadas(): int
+    {
+        $stmt = $this->pdo->prepare(
+            "UPDATE reposiciones SET estado = 'tomada'
+             WHERE estado = 'agendada' AND fecha IS NOT NULL AND fecha < CURDATE()"
+        );
+        $stmt->execute();
+        return $stmt->rowCount();
+    }
+
+    public function faltasEnSemana(string $sucursalId, string $lunes, string $sabado): array
+    {
+        $stmt = $this->pdo->prepare(
+            "SELECT r.id, r.alumno_folio, r.fecha_falta, r.motivo, r.estado,
+                    a.nombre AS alumno_nombre
+             FROM reposiciones r
+             JOIN alumnos a ON a.folio = r.alumno_folio
+             WHERE r.sucursal_id = :suc
+               AND r.fecha_falta BETWEEN :lunes AND :sabado
+               AND r.estado <> 'cancelada'
+             ORDER BY r.fecha_falta"
+        );
+        $stmt->execute([':suc' => $sucursalId, ':lunes' => $lunes, ':sabado' => $sabado]);
+
+        return array_map(fn(array $r): array => [
+            'reposicionId' => $r['id'],
+            'alumnoFolio'  => $r['alumno_folio'],
+            'alumnoNombre' => $r['alumno_nombre'],
+            'fecha'        => $r['fecha_falta'],
+            'dia'          => $this->diaDeFecha($r['fecha_falta']),
+            'motivo'       => $r['motivo'],
+            'estado'       => $r['estado'],
+        ], $stmt->fetchAll());
+    }
+
     // ── Validación de colocación (date-specific) ─────────────────────────────
     private function validarColocacion(array $d, string $excludeId): void
     {
         $dur = $d['duracionMin'];
 
-        // 0. El instructor debe estar disponible en esa franja
-        $disp = $this->pdo->prepare('SELECT disp_hora_inicio, disp_hora_fin FROM instructores WHERE id = ?');
-        $disp->execute([$d['instructorId']]);
-        $rango = $disp->fetch();
-        if ($rango && $rango['disp_hora_inicio'] && $rango['disp_hora_fin']) {
-            $ini = substr((string) $rango['disp_hora_inicio'], 0, 5);
-            $fin = substr((string) $rango['disp_hora_fin'], 0, 5);
-            $hf  = date('H:i', (int) strtotime($d['horaInicio']) + $dur * 60);
-            if ($d['horaInicio'] < $ini || $hf > $fin) {
-                throw new RuntimeException("El instructor solo está disponible de $ini a $fin", 409);
-            }
-        }
+        // 0. El instructor debe trabajar ese día y a esa hora.
+        //    Misma regla que usa la asignación recurrente: vive en un solo lugar.
+        $this->instructores->disponibleEn($d['instructorId'], $d['dia'], $d['horaInicio'], $dur);
 
         // 1a. Instructor ocupado por una clase recurrente vigente ese día/fecha
         $stmt = $this->pdo->prepare(
@@ -284,6 +347,7 @@ class ReposicionMySqlRepository implements ReposicionRepository
             'alumnoModalidad'     => $r['alumno_modalidad'] ?? null,
             'sucursalId'          => $r['sucursal_id'],
             'motivo'              => $r['motivo'],
+            'fechaFalta'          => $r['fecha_falta'] ?? null,
             'origen'              => $r['origen'],
             'estado'              => $r['estado'],
             'vence'               => $r['vence'],

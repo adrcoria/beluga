@@ -1,4 +1,5 @@
 import { useAuthStore } from '@/stores/auth'
+import router from '@/router'
 
 // In dev BASE_URL = '/' → prefix = ''. In prod BASE_URL = '/admin/' → prefix = '/admin'
 export const apiBase = import.meta.env.BASE_URL.replace(/\/$/, '')
@@ -13,7 +14,17 @@ export function useApi() {
     }
   }
 
+  // Sesión expirada/inválida: limpiar y mandar a login
+  function sesionInvalida() {
+    const auth = useAuthStore()
+    if (auth.token) auth.logout()
+    if (router.currentRoute.value.name !== 'login') {
+      router.push({ name: 'login' })
+    }
+  }
+
   async function errorMsg(res: Response): Promise<never> {
+    if (res.status === 401) sesionInvalida()
     let msg = `Error ${res.status}`
     try { msg = (await res.json()).error ?? msg } catch { /* response was not JSON */ }
     throw new Error(msg)

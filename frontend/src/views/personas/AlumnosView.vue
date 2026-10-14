@@ -8,6 +8,10 @@ import { useAlumnos, planesAMapa, type AlumnoResumen, type PlanCatalogo } from '
 import { useModalidades, type Modalidad } from '@/composables/useModalidades'
 import { useSwal } from '@/composables/useSwal'
 import { useSucursalStore } from '@/stores/sucursal'
+import { usePermisos } from '@/composables/usePermisos'
+import SoloLectura from '@/components/SoloLectura.vue'
+
+const { puedeEditar } = usePermisos('alumnos')
 
 const { exito, confirmar } = useSwal()
 
@@ -96,23 +100,7 @@ const fmtFecha = (f?: string) =>
 // La asignación a slots de horario es responsabilidad del Calendario (etapa separada).
 const hoy = new Date().toISOString().slice(0, 10)
 
-// Fecha máxima para nacimiento = hoy − 1 año (mínimo requerido)
-const maxFechaNac = computed(() => {
-  const d = new Date()
-  d.setFullYear(d.getFullYear() - 1)
-  return d.toISOString().slice(0, 10)
-})
-
-const errorFechaNac = computed<string[]>(() => {
-  const v = form.value.fechaNacimiento
-  if (!v) return []
-  const ahora = new Date()
-  const nacer = new Date(v + 'T12:00:00')
-  if (nacer > ahora) return ['No puede ser fecha futura']
-  const edadDias = (ahora.getTime() - nacer.getTime()) / 86_400_000
-  if (edadDias <= 365) return ['El inscrito debe tener más de 1 año de edad']
-  return []
-})
+// Fecha de nacimiento: captura libre (sin candado de edad mínima ni tope).
 const errorFechaInsc = computed<string[]>(() => {
   const v = form.value.fechaInscripcion
   if (!v) return ['Campo requerido']
@@ -132,8 +120,12 @@ function initForm() {
            montoBaseInscripcion: 300,
            aplicarDescuentoInsc: false,
            descuentoPctInsc: '' as string | number, descuentoMotivoInsc:'',
-           status:'activo' }
+           status:'activo', notas:'' }
 }
+
+// Un prealumno viene a probar: no se le cobra nada hasta que se inscriba, así
+// que el alta le oculta mensualidad e inscripción y le pide notas.
+const esPrueba = computed(() => form.value.status === 'prueba')
 
 // Clases disponibles filtradas por modalidad seleccionada
 const clasesDisponibles = computed(() =>
@@ -170,7 +162,7 @@ function abrirAlta() { form.value = initForm(); errorAlta.value = ''; modalAlta.
 async function guardar() {
   const { valid } = await formRef.value!.validate()
   if (!valid) return
-  if (errorFechaNac.value.length || errorFechaInsc.value.length) return
+  if (errorFechaInsc.value.length) return
   guardando.value = true; errorAlta.value = ''
   try {
     await alumnos.crear({
@@ -178,18 +170,24 @@ async function guardar() {
       fechaNacimiento: form.value.fechaNacimiento || null,
       contacto: { tutor: form.value.tutor || null, telefono: form.value.telefono, email: form.value.email || null },
       modalidad: form.value.modalidad,
-      plan: { clasesSemana: form.value.clasesSemana, mensualidad: montoFinal.value },
+      plan: { clasesSemana: form.value.clasesSemana, mensualidad: esPrueba.value ? 0 : montoFinal.value },
       fechaInicio: form.value.fechaInscripcion,
-      inscripcionPagada: montoInscFinal.value === 0,
-      montoInscripcion: montoInscFinal.value,
-      descuento: descPct.value > 0 ? { pct: descPct.value, motivo: form.value.descuentoMotivo } : null,
+      inscripcionPagada: !esPrueba.value && montoInscFinal.value === 0,
+      montoInscripcion: esPrueba.value ? 0 : montoInscFinal.value,
+      descuento: !esPrueba.value && descPct.value > 0 ? { pct: descPct.value, motivo: form.value.descuentoMotivo } : null,
       disponibilidad: { dias: [], horaInicio: null, horaFin: null },
       status: form.value.status,
+      notas: form.value.notas.trim() || null,
       sucursalId: sucursalStore.sucursalActivaId,
     })
     modalAlta.value = false
     await cargar()
-    exito('¡Alumno registrado!', 'El alumno fue dado de alta correctamente.')
+    exito(
+      esPrueba.value ? '¡Prealumno registrado!' : '¡Alumno registrado!',
+      esPrueba.value
+        ? 'Agéndale la clase muestra desde el Calendario.'
+        : 'El alumno fue dado de alta correctamente.'
+    )
   } catch (e: any) { errorAlta.value = e.message }
   finally { guardando.value = false }
 }
@@ -205,8 +203,15 @@ const formEdit = ref({
   nombre: '', fechaNacimiento: '', fechaInicio: '', tutor: '', telefono: '', email: '',
   modalidad: 'GRUPAL', clasesSemana: 1, mensualidad: 0,
   aplicarDescuento: false, descuentoPct: '' as string | number, descuentoMotivo: '',
-  status: 'activo',
+  status: 'activo', notas: '',
 })
+const statusOriginal = ref('')
+
+// Pasar de prueba a activo es la inscripción del prealumno: al guardar, el
+// backend le genera la inscripción y la primera mensualidad.
+const convierteAAlumno = computed(() =>
+  statusOriginal.value === 'prueba' && formEdit.value.status === 'activo'
+)
 const fechaInicioOriginal = ref('')
 
 const clasesDisponiblesEdit = computed(() =>
@@ -252,7 +257,9 @@ function abrirEditar(a: AlumnoResumen) {
     descuentoPct:     a.descuento?.pct ?? '',
     descuentoMotivo:  a.descuento?.motivo ?? '',
     status:           a.status,
+    notas:            a.notas ?? '',
   }
+  statusOriginal.value = a.status
   errorEdit.value = ''
   modalEditar.value = true
 }
@@ -315,10 +322,16 @@ async function guardarEditar() {
         ? { pct: descPctEdit.value, motivo: formEdit.value.descuentoMotivo }
         : null,
       status: formEdit.value.status,
+      notas:  formEdit.value.notas.trim() || null,
     })
     modalEditar.value = false
     await cargar()
-    exito('Alumno actualizado', 'Los datos fueron guardados correctamente.')
+    exito(
+      'Alumno actualizado',
+      convierteAAlumno.value
+        ? 'Se inscribió: ya se le generaron la inscripción y la primera mensualidad.'
+        : 'Los datos fueron guardados correctamente.'
+    )
   } catch (e: any) { errorEdit.value = e.message }
   finally { guardandoEdit.value = false }
 }
@@ -476,6 +489,7 @@ async function ejecutarImport() {
 
 <template>
   <div class="d-flex flex-column ga-4">
+    <SoloLectura modulo="alumnos" detalle="dar de alta ni editar alumnos" />
 
     <!-- Stats rápidas -->
     <v-row dense>
@@ -534,10 +548,10 @@ async function ejecutarImport() {
           <v-btn variant="outlined" prepend-icon="mdi-download-outline" rounded="lg" @click="descargarPlantilla">
             Plantilla
           </v-btn>
-          <v-btn variant="outlined" prepend-icon="mdi-upload-outline" rounded="lg" @click="abrirImportar">
+          <v-btn v-if="puedeEditar" variant="outlined" prepend-icon="mdi-upload-outline" rounded="lg" @click="abrirImportar">
             Importar
           </v-btn>
-          <v-btn color="primary" prepend-icon="mdi-plus" rounded="lg" @click="abrirAlta">
+          <v-btn v-if="puedeEditar" color="primary" prepend-icon="mdi-plus" rounded="lg" @click="abrirAlta">
             Nuevo alumno
           </v-btn>
         </div>
@@ -599,9 +613,9 @@ async function ejecutarImport() {
                 <v-btn icon="mdi-qrcode" size="x-small" variant="text" color="primary"
                   title="Compartir QR de acceso"
                   @click.stop="abrirQr(a)" />
-                <v-btn icon="mdi-pencil-outline" size="x-small" variant="text" color="grey"
+                <v-btn v-if="puedeEditar" icon="mdi-pencil-outline" size="x-small" variant="text" color="grey"
                   @click.stop="abrirEditar(a)" />
-                <v-btn icon="mdi-trash-can-outline" size="x-small" variant="text" color="error"
+                <v-btn v-if="puedeEditar" icon="mdi-trash-can-outline" size="x-small" variant="text" color="error"
                   @click.stop="eliminarAlumno(a)" />
                 <v-icon icon="mdi-chevron-right" size="18" color="grey-lighten-1" />
               </div>
@@ -616,8 +630,12 @@ async function ejecutarImport() {
       <v-card rounded="xl">
         <div style="background:linear-gradient(135deg,#e8f4ff,#dbeafe);padding:20px 24px;border-radius:16px 16px 0 0;border-bottom:1px solid #b8d4ff" class="d-flex align-center justify-space-between">
           <div>
-            <div style="color:#1a3fe8;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px">Alta de alumno</div>
-            <div style="color:#0a1e6e;font-size:18px;font-weight:700;font-family:'Fraunces',serif">Nuevo alumno</div>
+            <div style="color:#1a3fe8;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px">
+              {{ esPrueba ? 'Alta de prealumno' : 'Alta de alumno' }}
+            </div>
+            <div style="color:#0a1e6e;font-size:18px;font-weight:700;font-family:'Fraunces',serif">
+              {{ esPrueba ? 'Nuevo prealumno' : 'Nuevo alumno' }}
+            </div>
           </div>
           <v-btn icon="mdi-close" variant="text" color="#0a1e6e" @click="modalAlta = false" />
         </div>
@@ -625,6 +643,26 @@ async function ejecutarImport() {
         <v-form ref="formRef">
         <v-card-text class="pa-5">
           <v-row dense>
+            <!-- Tipo de registro -->
+            <v-col cols="12">
+              <v-select
+                v-model="form.status"
+                :items="[
+                  { title: 'Alumno — se inscribe y se le cobra', value: 'activo' },
+                  { title: 'Prealumno — solo viene a clase muestra', value: 'prueba' },
+                ]"
+                label="Tipo de registro"
+                density="compact" variant="outlined" rounded="lg"
+                prepend-inner-icon="mdi-account-plus-outline"
+              />
+            </v-col>
+            <v-col v-if="esPrueba" cols="12">
+              <v-alert type="info" density="compact" rounded="lg" variant="tonal" icon="mdi-information-outline" style="font-size:12px">
+                Al prealumno no se le genera cobro de inscripción ni mensualidad. Cuando se inscriba, cámbialo a
+                <strong>Activo</strong> desde su ficha y el sistema le generará los cobros.
+              </v-alert>
+            </v-col>
+
             <!-- Datos personales -->
             <v-col cols="12"><p class="section-label">Datos personales</p></v-col>
             <v-col cols="12" sm="6">
@@ -641,8 +679,6 @@ async function ejecutarImport() {
                 label="Fecha de nacimiento"
                 type="date"
                 density="compact" variant="outlined" rounded="lg"
-                :max="maxFechaNac"
-                :error-messages="errorFechaNac"
               />
             </v-col>
             <v-col cols="12" sm="6">
@@ -669,15 +705,15 @@ async function ejecutarImport() {
             </v-col>
 
             <!-- Plan -->
-            <v-col cols="12"><p class="section-label mt-2">Plan y fechas</p></v-col>
-            <v-col cols="12" sm="6">
+            <v-col cols="12"><p class="section-label mt-2">{{ esPrueba ? 'Qué viene a probar' : 'Plan y fechas' }}</p></v-col>
+            <v-col cols="12" :sm="esPrueba ? 6 : 6">
               <v-select
                 v-model="form.modalidad"
                 :items="modalidades.map(m => ({ title: `${m.clave} — ${m.label}`, value: m.clave }))"
                 label="Modalidad" density="compact" variant="outlined" rounded="lg"
               />
             </v-col>
-            <v-col cols="12" sm="6">
+            <v-col v-if="!esPrueba" cols="12" sm="6">
               <v-select
                 v-model.number="form.clasesSemana"
                 :items="clasesDisponibles"
@@ -688,14 +724,23 @@ async function ejecutarImport() {
             <v-col cols="12" sm="6">
               <v-text-field
                 v-model="form.fechaInscripcion"
-                label="Fecha de inscripción *"
+                :label="esPrueba ? 'Fecha de registro *' : 'Fecha de inscripción *'"
                 type="date"
                 density="compact" variant="outlined" rounded="lg"
                 :max="hoy"
                 :error-messages="errorFechaInsc"
               />
             </v-col>
-            <v-col cols="12" sm="6">
+            <v-col v-if="esPrueba" cols="12">
+              <v-textarea
+                v-model="form.notas"
+                label="Notas"
+                placeholder="De dónde llegó, qué le interesa, qué se le ofreció…"
+                density="compact" variant="outlined" rounded="lg"
+                rows="2" auto-grow
+              />
+            </v-col>
+            <v-col v-if="!esPrueba" cols="12" sm="6">
               <v-text-field
                 v-model.number="form.mensualidad"
                 label="Mensualidad base *"
@@ -707,7 +752,7 @@ async function ejecutarImport() {
                 :rules="[v => v > 0 || 'Ingresa la mensualidad']"
               />
             </v-col>
-            <v-col cols="12" sm="6" class="d-flex align-center">
+            <v-col v-if="!esPrueba" cols="12" sm="6" class="d-flex align-center">
               <v-checkbox
                 v-model="form.aplicarDescuento"
                 label="Aplicar descuento"
@@ -716,7 +761,7 @@ async function ejecutarImport() {
                 color="primary"
               />
             </v-col>
-            <template v-if="form.aplicarDescuento">
+            <template v-if="!esPrueba && form.aplicarDescuento">
               <v-col cols="12" sm="6">
                 <v-text-field
                   v-model="form.descuentoPct"
@@ -738,7 +783,7 @@ async function ejecutarImport() {
             </template>
 
             <!-- Resumen mensual (siempre visible) -->
-            <v-col v-if="form.mensualidad > 0" cols="12">
+            <v-col v-if="!esPrueba && form.mensualidad > 0" cols="12">
               <div class="resumen-precio">
                 <template v-if="tieneResumen">
                   <div class="resumen-row">
@@ -759,6 +804,7 @@ async function ejecutarImport() {
             </v-col>
 
             <!-- Inscripción -->
+            <template v-if="!esPrueba">
             <v-col cols="12"><p class="section-label mt-2">Cuota de inscripción</p></v-col>
             <v-col cols="12" sm="6">
               <v-text-field
@@ -816,11 +862,17 @@ async function ejecutarImport() {
                 </div>
               </v-col>
             </template>
+            </template>
 
             <!-- Nota informativa -->
             <v-col cols="12">
               <v-alert type="info" density="compact" rounded="lg" variant="tonal" icon="mdi-calendar-clock-outline" class="mt-1">
-                La asignación de horarios y slots con instructor se realiza desde el <strong>Calendario</strong>, una vez registrado el alumno.
+                <template v-if="esPrueba">
+                  La clase muestra se agenda desde el <strong>Calendario</strong>, una vez registrado el prealumno.
+                </template>
+                <template v-else>
+                  La asignación de horarios y slots con instructor se realiza desde el <strong>Calendario</strong>, una vez registrado el alumno.
+                </template>
               </v-alert>
             </v-col>
           </v-row>
@@ -831,7 +883,9 @@ async function ejecutarImport() {
         <v-card-actions class="pa-4 ga-2 justify-end">
           <v-alert v-if="errorAlta" type="error" density="compact" variant="tonal" rounded="lg" class="mr-auto" style="flex:1">{{ errorAlta }}</v-alert>
           <v-btn variant="text" @click="modalAlta = false">Cancelar</v-btn>
-          <v-btn color="primary" rounded="lg" :loading="guardando" @click="guardar">Registrar alumno</v-btn>
+          <v-btn color="primary" rounded="lg" :loading="guardando" @click="guardar">
+            {{ esPrueba ? 'Registrar prealumno' : 'Registrar alumno' }}
+          </v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -1054,7 +1108,6 @@ async function ejecutarImport() {
                 label="Fecha de nacimiento"
                 type="date"
                 density="compact" variant="outlined" rounded="lg"
-                :max="maxFechaNac"
               />
             </v-col>
             <v-col cols="12" sm="6">
@@ -1085,6 +1138,21 @@ async function ejecutarImport() {
                 :items="[{title:'Activo',value:'activo'},{title:'Prueba',value:'prueba'},{title:'Baja',value:'baja'}]"
                 label="Status"
                 density="compact" variant="outlined" rounded="lg"
+              />
+            </v-col>
+            <v-col v-if="convierteAAlumno" cols="12">
+              <v-alert type="warning" density="compact" variant="tonal" rounded="lg" icon="mdi-cash-plus" style="font-size:12px">
+                Al guardar se le generarán la <strong>cuota de inscripción</strong> y la
+                <strong>primera mensualidad</strong>, que como prealumno no se le habían cobrado.
+              </v-alert>
+            </v-col>
+            <v-col cols="12">
+              <v-textarea
+                v-model="formEdit.notas"
+                label="Notas"
+                placeholder="De dónde llegó, qué le interesa, qué se le ofreció…"
+                density="compact" variant="outlined" rounded="lg"
+                rows="2" auto-grow
               />
             </v-col>
 

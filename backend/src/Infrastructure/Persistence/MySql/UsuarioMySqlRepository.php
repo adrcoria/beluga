@@ -6,18 +6,33 @@ namespace Beluga\Infrastructure\Persistence\MySql;
 
 use Beluga\Domain\Usuario\UsuarioRepository;
 use PDO;
+use RuntimeException;
 
 class UsuarioMySqlRepository implements UsuarioRepository
 {
     public function __construct(private readonly PDO $pdo) {}
 
-    public function listar(): array
+    public function listar(bool $incluirInactivos = false): array
     {
+        $where = $incluirInactivos ? '' : 'WHERE activo = 1';
+
+        // Los activos primero: en el listado normal lo que importa es quién
+        // tiene acceso hoy, y los de baja quedan al final como referencia.
         $stmt = $this->pdo->query(
-            'SELECT id, nombre, email, rol, sucursales, activo, creado_en
-             FROM usuarios WHERE activo = 1 ORDER BY nombre'
+            "SELECT id, nombre, email, rol, sucursales, activo, creado_en
+             FROM usuarios $where
+             ORDER BY activo DESC, nombre"
         );
-        return array_map(fn($r) => $this->mapear($r), $stmt->fetchAll());
+
+        $usuarios = array_map(fn($r) => $this->mapear($r), $stmt->fetchAll());
+
+        // A los inactivos se les calcula la huella para saber si se pueden
+        // borrar, y así la pantalla no ofrece un botón que va a fallar.
+        foreach ($usuarios as &$u) {
+            $u['puedeEliminarse'] = $u['activo'] ? false : array_sum($this->huella($u['id'])) === 0;
+        }
+
+        return $usuarios;
     }
 
     public function crear(array $datos): array
@@ -69,6 +84,53 @@ class UsuarioMySqlRepository implements UsuarioRepository
         }
 
         return $this->porId($id);
+    }
+
+    public function huella(string $id): array
+    {
+        $contar = function (string $sql) use ($id): int {
+            $stmt = $this->pdo->prepare($sql);
+            $stmt->execute([$id]);
+            return (int) $stmt->fetchColumn();
+        };
+
+        return [
+            'pagos'         => $contar('SELECT COUNT(*) FROM pagos WHERE usuario_id = ?'),
+            'inhabiles'     => $contar('SELECT COUNT(*) FROM inhabiles WHERE declarado_por = ?'),
+            'condonaciones' => $contar('SELECT COUNT(*) FROM cobros WHERE condonado_por = ?'),
+        ];
+    }
+
+    public function eliminar(string $id): void
+    {
+        $u = $this->porId($id);
+        if (!$u) {
+            throw new RuntimeException('Usuario no encontrado');
+        }
+        if ($u['activo']) {
+            throw new RuntimeException(
+                'Primero da de baja al usuario. Solo se pueden eliminar los que ya están inactivos.'
+            );
+        }
+
+        $huella = $this->huella($id);
+        if (array_sum($huella) > 0) {
+            // pagos e inhabiles lo referencian con ON DELETE RESTRICT: la base
+            // lo rechazaría de todos modos. Mejor explicarlo que mostrar el
+            // error de la llave foránea.
+            $partes = [];
+            if ($huella['pagos'])         $partes[] = $huella['pagos'] . ' pago(s) cobrado(s)';
+            if ($huella['inhabiles'])     $partes[] = $huella['inhabiles'] . ' día(s) inhábil(es) declarado(s)';
+            if ($huella['condonaciones']) $partes[] = $huella['condonaciones'] . ' cobro(s) condonado(s)';
+
+            throw new RuntimeException(
+                'No se puede eliminar: tiene ' . implode(' y ', $partes) . ' a su nombre. '
+                . 'Esos movimientos deben seguir diciendo quién los hizo, así que el usuario se queda como inactivo.'
+            );
+        }
+
+        // Los OTP caen solos por ON DELETE CASCADE
+        $this->pdo->prepare('DELETE FROM usuarios WHERE id = ?')->execute([$id]);
     }
 
     private function porId(string $id): ?array

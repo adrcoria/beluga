@@ -1,25 +1,36 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAlumnos, type AlumnoResumen } from '@/composables/useAlumnos'
-import { useCobranza } from '@/composables/useCobranza'
 
 const router     = useRouter()
 const alumnos    = useAlumnos()
-const cobranzaApi = useCobranza()
+
+// Cumpleañeros de HOY (reutiliza la lista de alumnos ya cargada)
+const hoyDate = new Date()
+const cumpleanosHoy = computed(() =>
+  lista.value.filter(a => {
+    if (!a.fechaNacimiento) return false
+    const d = new Date(a.fechaNacimiento + 'T12:00:00')
+    return d.getDate() === hoyDate.getDate() && d.getMonth() === hoyDate.getMonth()
+  })
+)
+
+function felicitarWa(a: AlumnoResumen) {
+  const tel = a.contacto?.telefono?.replace(/\D/g, '').slice(-10)
+  const msg = encodeURIComponent(`¡Feliz cumpleaños, ${a.nombre}! 🎉🐳 Te desea todo el equipo de Acuática Beluga.`)
+  window.open(tel ? `https://wa.me/52${tel}?text=${msg}` : `https://wa.me/?text=${msg}`, '_blank')
+}
 
 const lista              = ref<AlumnoResumen[]>([])
 const loading            = ref(true)
-const procesandoCobros   = ref(true)
-const cobrosGenerados    = ref(0)
 
+// La generación de cobros corre al iniciar sesión (con overlay), no aquí.
 onMounted(async () => {
-  // Ambas peticiones en paralelo
-  await Promise.allSettled([
-    alumnos.listar({ status: 'activo' }).then(r => { lista.value = r }).finally(() => { loading.value = false }),
-    cobranzaApi.generarCobros().then(r => { cobrosGenerados.value = r.generados }),
-  ])
-  procesandoCobros.value = false
+  try {
+    lista.value = await alumnos.listar({ status: 'activo' })
+  } catch {}
+  finally { loading.value = false }
 })
 
 const activos        = () => lista.value.length
@@ -43,35 +54,6 @@ const acciones = [
 
 <template>
   <div class="d-flex flex-column ga-5">
-
-    <!-- Banner: procesando cobros -->
-    <v-alert
-      v-if="procesandoCobros"
-      density="compact"
-      variant="tonal"
-      color="primary"
-      rounded="lg"
-      icon="mdi-refresh"
-    >
-      <div class="d-flex align-center ga-3">
-        <v-progress-circular indeterminate size="16" width="2" color="primary" />
-        <span style="font-size:13px">Generando cobros del día…</span>
-      </div>
-    </v-alert>
-
-    <v-alert
-      v-else-if="cobrosGenerados > 0"
-      density="compact"
-      variant="tonal"
-      color="success"
-      rounded="lg"
-      icon="mdi-check-circle-outline"
-      closable
-    >
-      <span style="font-size:13px">
-        <strong>{{ cobrosGenerados }} cobro{{ cobrosGenerados !== 1 ? 's' : '' }}</strong> generado{{ cobrosGenerados !== 1 ? 's' : '' }} para hoy
-      </span>
-    </v-alert>
 
     <!-- Stats -->
     <v-row dense>
@@ -111,6 +93,34 @@ const acciones = [
         </v-card>
       </v-col>
     </v-row>
+
+    <!-- Cumpleañeros de hoy -->
+    <v-card v-if="!loading && cumpleanosHoy.length" rounded="xl" border style="background:linear-gradient(135deg,#fdf2f8,#fce7f3);border-color:#f9a8d4">
+      <v-card-text class="pa-4 d-flex flex-wrap align-center ga-3">
+        <div class="d-flex align-center ga-2">
+          <v-icon icon="mdi-cake-variant" color="#e11d8f" size="26" />
+          <div>
+            <div style="font-weight:700;color:#9d174d;font-size:14px;font-family:'Fraunces',serif">
+              ¡Hoy cumple{{ cumpleanosHoy.length > 1 ? 'n' : '' }} años!
+            </div>
+            <div style="font-size:11px;color:#be185d">{{ cumpleanosHoy.length }} cumpleañer{{ cumpleanosHoy.length > 1 ? 'os' : 'o' }} hoy</div>
+          </div>
+        </div>
+        <div class="d-flex flex-wrap ga-2" style="flex:1">
+          <v-chip
+            v-for="a in cumpleanosHoy" :key="a.folio"
+            color="pink" variant="flat" size="small"
+            prepend-icon="mdi-party-popper"
+            style="cursor:pointer"
+            @click="felicitarWa(a)"
+          >
+            {{ a.nombre }}
+            <v-icon end icon="mdi-whatsapp" size="14" />
+          </v-chip>
+        </div>
+        <v-btn variant="text" size="small" color="#9d174d" @click="router.push('/cumpleanos')">Ver módulo →</v-btn>
+      </v-card-text>
+    </v-card>
 
     <!-- Alertas + Resumen -->
     <v-row dense>

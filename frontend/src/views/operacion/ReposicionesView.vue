@@ -5,6 +5,10 @@ import { useInhabiles, type PreviewInhabil } from '@/composables/useInhabiles'
 import { useAlumnos, type AlumnoResumen } from '@/composables/useAlumnos'
 import { useSwal } from '@/composables/useSwal'
 import { useSucursalStore } from '@/stores/sucursal'
+import { usePermisos } from '@/composables/usePermisos'
+import SoloLectura from '@/components/SoloLectura.vue'
+
+const { puedeEditar } = usePermisos('reposiciones')
 
 const reposicionesApi = useReposiciones()
 const inhabilesApi    = useInhabiles()
@@ -15,7 +19,7 @@ const { exito, error: notifError, confirmar } = useSwal()
 const lista        = ref<Reposicion[]>([])
 const alumnos      = ref<AlumnoResumen[]>([])
 const cargando     = ref(false)
-const filtroEstado = ref<'pendiente' | 'agendada' | 'vencida'>('pendiente')
+const filtroEstado = ref<'pendiente' | 'agendada' | 'tomada' | 'vencida'>('pendiente')
 
 const sucursalId = computed(() => sucursalStore.sucursalActivaId)
 
@@ -43,29 +47,34 @@ const filtradas = computed(() => lista.value.filter(r => r.estado === filtroEsta
 const conteos = computed(() => ({
   pendiente: lista.value.filter(r => r.estado === 'pendiente').length,
   agendada:  lista.value.filter(r => r.estado === 'agendada').length,
+  tomada:    lista.value.filter(r => r.estado === 'tomada').length,
   vencida:   lista.value.filter(r => r.estado === 'vencida').length,
 }))
+
+const hoyISO = () => new Date().toISOString().slice(0, 10)
 
 // ── Modal crear comodín ───────────────────────────────────────────────────────
 const modalCrear = ref(false)
 const guardando  = ref(false)
-const form       = ref({ alumnoFolio: '' as string | null, motivo: '' })
+const form       = ref({ alumnoFolio: '' as string | null, motivo: '', fechaFalta: '' })
 
 const alumnosOpts = computed(() => alumnos.value.map(a => ({ title: `${a.nombre} · #${a.folio}`, value: a.folio })))
 
 function abrirCrear() {
-  form.value = { alumnoFolio: null, motivo: '' }
+  form.value = { alumnoFolio: null, motivo: '', fechaFalta: hoyISO() }
   modalCrear.value = true
 }
 
 async function crear() {
   if (!form.value.alumnoFolio) { notifError('Selecciona un alumno'); return }
+  if (!form.value.fechaFalta)  { notifError('Indica qué día faltó'); return }
   guardando.value = true
   try {
     await reposicionesApi.crear({
       alumnoFolio: form.value.alumnoFolio,
       sucursalId:  sucursalId.value,
       motivo:      form.value.motivo || undefined,
+      fechaFalta:  form.value.fechaFalta,
     })
     modalCrear.value = false
     exito('Clase a reponer creada', 'Queda disponible para agendar en el Calendario.')
@@ -150,6 +159,7 @@ async function declararInhabil() {
 
 <template>
   <div class="d-flex flex-column ga-4">
+    <SoloLectura modulo="reposiciones" detalle="crear reposiciones ni declarar días inhábiles" />
 
     <!-- Toolbar -->
     <v-card rounded="xl" border>
@@ -160,6 +170,7 @@ async function declararInhabil() {
               v-for="f in [
                 { val:'pendiente', label:`Pendientes (${conteos.pendiente})` },
                 { val:'agendada',  label:`Agendadas (${conteos.agendada})` },
+                { val:'tomada',    label:`Tomadas (${conteos.tomada})` },
                 { val:'vencida',   label:`Vencidas (${conteos.vencida})` },
               ]" :key="f.val"
               :color="filtroEstado === f.val ? 'primary' : undefined"
@@ -169,10 +180,10 @@ async function declararInhabil() {
             >{{ f.label }}</v-chip>
           </div>
           <v-spacer />
-          <v-btn variant="outlined" color="orange-darken-2" prepend-icon="mdi-calendar-remove" rounded="lg" @click="abrirInhabil">
+          <v-btn v-if="puedeEditar" variant="outlined" color="orange-darken-2" prepend-icon="mdi-calendar-remove" rounded="lg" @click="abrirInhabil">
             Declarar día inhábil
           </v-btn>
-          <v-btn color="primary" prepend-icon="mdi-plus" rounded="lg" @click="abrirCrear">
+          <v-btn v-if="puedeEditar" color="primary" prepend-icon="mdi-plus" rounded="lg" @click="abrirCrear">
 Reponer clase
           </v-btn>
         </div>
@@ -187,6 +198,7 @@ Reponer clase
             <th class="col-header">Alumno</th>
             <th class="col-header">Origen</th>
             <th class="col-header">Motivo</th>
+            <th class="col-header">Faltó el</th>
             <th class="col-header">Vence</th>
             <th class="col-header">Agendada para</th>
             <th></th>
@@ -194,10 +206,10 @@ Reponer clase
         </thead>
         <tbody>
           <tr v-if="cargando">
-            <td colspan="6" class="text-center py-12"><v-progress-circular indeterminate color="primary" size="32" /></td>
+            <td colspan="7" class="text-center py-12"><v-progress-circular indeterminate color="primary" size="32" /></td>
           </tr>
           <tr v-else-if="!filtradas.length">
-            <td colspan="6" class="text-center py-12 text-medium-emphasis" style="font-size:14px">
+            <td colspan="7" class="text-center py-12 text-medium-emphasis" style="font-size:14px">
               Sin reposiciones {{ filtroEstado }}s
             </td>
           </tr>
@@ -212,6 +224,10 @@ Reponer clase
               </v-chip>
             </td>
             <td style="font-size:12px;color:#6b7280">{{ r.motivo || '—' }}</td>
+            <td style="font-size:12px;color:#374151">
+              <span v-if="r.fechaFalta">{{ fmtFecha(r.fechaFalta) }}</span>
+              <span v-else style="color:#d1d5db">—</span>
+            </td>
             <td style="font-size:12px;color:#6b7280">{{ fmtFecha(r.vence) }}</td>
             <td style="font-size:12px;color:#374151">
               <template v-if="r.estado === 'agendada' && r.fecha">
@@ -222,7 +238,7 @@ Reponer clase
             </td>
             <td class="text-right">
               <v-btn
-                v-if="r.estado === 'pendiente' || r.estado === 'agendada'"
+                v-if="puedeEditar && (r.estado === 'pendiente' || r.estado === 'agendada')"
                 icon="mdi-trash-can-outline" size="x-small" variant="text" color="error"
                 @click="cancelar(r)"
               />
@@ -253,6 +269,17 @@ Reponer clase
             label="Alumno *"
             density="compact" variant="outlined" rounded="lg"
             class="mb-3"
+          />
+          <!-- Sin la fecha de la falta no se puede ubicar en el pizarrón qué
+               clase se está reponiendo, que es justo para lo que sirve -->
+          <v-text-field
+            v-model="form.fechaFalta"
+            type="date"
+            label="¿Qué día faltó? *"
+            :max="hoyISO()"
+            density="compact" variant="outlined" rounded="lg"
+            class="mb-3"
+            :rules="[v => !!v || 'Indica el día de la falta']"
           />
           <v-text-field
             v-model="form.motivo"

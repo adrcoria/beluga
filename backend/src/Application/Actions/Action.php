@@ -55,4 +55,15 @@ abstract class Action
     {
         return $this->json(['error' => $message], $status);
     }
+
+    /**
+     * Caducidad del JWT: la próxima medianoche (cambio de día) en Morelia.
+     * Así la sesión vence al cambiar el día y el primer login del día siguiente
+     * vuelve a disparar la generación de cobros.
+     */
+    protected function tokenExp(): int
+    {
+        $manana = new \DateTime('tomorrow', new \DateTimeZone('America/Mexico_City'));
+        return $manana->getTimestamp();
+    }
 }

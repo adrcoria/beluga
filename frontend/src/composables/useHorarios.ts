@@ -21,6 +21,8 @@ export interface CeldaHorario {
   reposicionId?: string
   fecha?: string
   motivo?: string | null
+  /** Clase de prueba de un prealumno: ocupa la celda una sola fecha */
+  esMuestra?: boolean
 }
 
 export interface InstructorPizarron {
@@ -28,15 +30,38 @@ export interface InstructorPizarron {
   nombre: string
   iniciales: string
   niveles: string[]          // claves de modalidades que atiende
-  dispHoraInicio?: string | null
-  dispHoraFin?: string | null
+  /** Rango por día. Día ausente = no viene. Mapa vacío = sin restricción. */
+  horarioPorDia?: Record<string, { horaInicio: string; horaFin: string }>
+}
+
+/**
+ * Día en que un alumno faltó y por el que tiene una reposición. No es una celda:
+ * marca la clase habitual que se está reponiendo, para ubicarla en el pizarrón.
+ */
+export interface FaltaPizarron {
+  reposicionId: string
+  alumnoFolio:  string
+  alumnoNombre: string
+  fecha:        string
+  dia:          string
+  motivo:       string | null
+  estado:       string
 }
 
 export interface Pizarron {
   semana: { lunes: string; sabado: string }
-  config: { horaInicio: string; horaFin: string; cupoGrupal: number }
+  config: {
+    horaInicio: string
+    horaFin: string
+    cupoGrupal: number
+    /** Horas de anticipación con las que avisar da derecho a reposición */
+    horasAviso: number
+  }
   instructores: InstructorPizarron[]
   celdas: CeldaHorario[]
+  faltas: FaltaPizarron[]
+  /** Avisos de «no viene» de la semana, con su veredicto de derecho */
+  ausencias: import('./useAusencias').Ausencia[]
 }
 
 export interface NuevaAsignacion {
@@ -50,6 +75,8 @@ export interface NuevaAsignacion {
   grupoId?: string | null
   vigenteDesde: string
   vigenteHasta?: string | null
+  /** true para una clase muestra: una sola fecha, no se repite */
+  esMuestra?: boolean
 }
 
 export function useHorarios() {

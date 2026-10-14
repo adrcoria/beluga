@@ -8,7 +8,10 @@ export interface Reposicion {
   sucursalId: string
   motivo: string | null
   origen: 'inhabil' | 'manual'
-  estado: 'pendiente' | 'agendada' | 'vencida' | 'cancelada'
+  /** 'tomada' la pone el sistema solo, en cuanto la fecha agendada queda atrás */
+  estado: 'pendiente' | 'agendada' | 'tomada' | 'vencida' | 'cancelada'
+  /** Qué día faltó el alumno. El pizarrón pinta esa celda. */
+  fechaFalta: string | null
   vence: string | null
   fecha: string | null
   instructorId: string | null
@@ -27,7 +30,7 @@ export function useReposiciones() {
     return api.get(`/api/reposiciones?sucursal=${encodeURIComponent(sucursalId)}${q}`)
   }
 
-  function crear(datos: { alumnoFolio: string; sucursalId: string; motivo?: string }): Promise<Reposicion> {
+  function crear(datos: { alumnoFolio: string; sucursalId: string; motivo?: string; fechaFalta: string }): Promise<Reposicion> {
     return api.post('/api/reposiciones', datos)
   }
 

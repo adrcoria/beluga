@@ -3,6 +3,10 @@ import { ref, onMounted } from 'vue'
 import { useConfiguracion, type Configuracion } from '@/composables/useConfiguracion'
 import { useSwal } from '@/composables/useSwal'
 import { useSucursalStore } from '@/stores/sucursal'
+import { usePermisos } from '@/composables/usePermisos'
+import SoloLectura from '@/components/SoloLectura.vue'
+
+const { puedeEditar } = usePermisos('parametros')
 
 const configApi = useConfiguracion()
 const sucursalStore = useSucursalStore()
@@ -20,7 +24,12 @@ const form = ref({
   horaInicio: '08:00',
   horaFin:    '21:00',
   cupoGrupal: 6,
+  // Anticipación mínima para que una falta dé derecho a reposición.
+  // El cliente pidió que fuera configurable, pero nunca menos de 2 horas.
+  avisoHoras: 2,
 })
+
+const AVISO_MINIMO = 2
 
 // Opciones de hora cada 30 min de 06:00 a 22:00
 const horasOpts = (() => {
@@ -39,6 +48,7 @@ async function cargar() {
     form.value.horaInicio = c.horario_grid_inicio ?? '08:00'
     form.value.horaFin    = c.horario_grid_fin    ?? '21:00'
     form.value.cupoGrupal = Number(c.horario_cupo_grupal ?? 6)
+    form.value.avisoHoras = Number(c.ausencia_horas_aviso ?? AVISO_MINIMO)
   } catch (e: any) {
     notifError('Error al cargar configuración', e.message)
   } finally {
@@ -78,12 +88,16 @@ async function guardar() {
   if (form.value.horaFin <= form.value.horaInicio) {
     notifError('La hora de fin debe ser mayor a la de inicio'); return
   }
+  if (!(form.value.avisoHoras >= AVISO_MINIMO)) {
+    notifError('Aviso mínimo', `No puede ser menor a ${AVISO_MINIMO} horas.`); return
+  }
   guardando.value = true
   try {
     const payload: Configuracion = {
       horario_grid_inicio: form.value.horaInicio,
       horario_grid_fin:    form.value.horaFin,
       horario_cupo_grupal: String(form.value.cupoGrupal),
+      ausencia_horas_aviso: String(form.value.avisoHoras),
     }
     await configApi.actualizar(payload)
     exito('Configuración guardada', 'Los cambios se aplican en el pizarrón del Calendario.')
@@ -97,6 +111,8 @@ async function guardar() {
 
 <template>
   <div class="d-flex flex-column ga-4">
+    <SoloLectura modulo="parametros" detalle="cambiar estos parámetros" />
+
     <v-card rounded="xl" border max-width="640">
       <div style="background:linear-gradient(135deg,#ecfdf5,#d1fae5);padding:20px 24px;border-radius:16px 16px 0 0;border-bottom:1px solid #a7f3d0">
         <div style="color:#059669;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px">
@@ -129,16 +145,30 @@ async function guardar() {
               type="number" min="2" max="30"
               density="compact" variant="outlined" rounded="lg" hide-details />
           </v-col>
+
+          <v-col cols="12"><p class="section-label mt-3">Reposiciones por falta avisada</p></v-col>
+          <v-col cols="6">
+            <v-text-field v-model.number="form.avisoHoras" label="Aviso mínimo (horas)"
+              type="number" :min="AVISO_MINIMO" max="72" suffix="h"
+              density="compact" variant="outlined" rounded="lg"
+              :rules="[v => v >= AVISO_MINIMO || `Mínimo ${AVISO_MINIMO} horas`]" />
+          </v-col>
         </v-row>
 
         <v-alert type="info" density="compact" variant="tonal" rounded="lg" class="mt-4" icon="mdi-information-outline">
           Estos parámetros definen el alto del pizarrón y el límite de alumnos por grupo en todo el sistema.
         </v-alert>
+
+        <v-alert type="info" density="compact" variant="tonal" rounded="lg" class="mt-3" icon="mdi-clock-alert-outline">
+          Si el alumno avisa su falta con <strong>{{ form.avisoHoras }} horas</strong> o más de anticipación, se le genera
+          una reposición automáticamente. Con menos aviso pierde la clase. Las faltas ya registradas
+          <strong>conservan</strong> el criterio con el que se resolvieron.
+        </v-alert>
       </v-card-text>
 
       <v-divider />
       <v-card-actions class="pa-4 justify-end">
-        <v-btn color="#0e3b33" variant="flat" rounded="lg" :loading="guardando" @click="guardar">
+        <v-btn v-if="puedeEditar" color="#0e3b33" variant="flat" rounded="lg" :loading="guardando" @click="guardar">
           Guardar configuración
         </v-btn>
       </v-card-actions>
@@ -171,7 +201,7 @@ async function guardar() {
               density="compact" variant="outlined" rounded="lg" hide-details />
           </v-col>
           <v-col cols="4" sm="6">
-            <v-btn color="primary" variant="flat" rounded="lg" :loading="guardandoFolio" @click="guardarFolio">
+            <v-btn v-if="puedeEditar" color="primary" variant="flat" rounded="lg" :loading="guardandoFolio" @click="guardarFolio">
               Aplicar
             </v-btn>
           </v-col>

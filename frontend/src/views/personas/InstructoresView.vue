@@ -5,6 +5,10 @@ import { useInstructores, type Instructor } from '@/composables/useInstructores'
 import { useModalidades, type Modalidad } from '@/composables/useModalidades'
 import { useSwal } from '@/composables/useSwal'
 import { useSucursalStore } from '@/stores/sucursal'
+import { usePermisos } from '@/composables/usePermisos'
+import SoloLectura from '@/components/SoloLectura.vue'
+
+const { puedeEditar } = usePermisos('instructores')
 
 const api           = useInstructores()
 const modApi        = useModalidades()
@@ -26,16 +30,37 @@ const procesandoId = ref<string | null>(null)
 const errorMsg     = ref('')
 const formRef      = ref<InstanceType<typeof VForm>>()
 
+/** Un renglón por día: si `asiste` está apagado, ese día no viene. */
+interface DiaHorario { asiste: boolean; horaInicio: string; horaFin: string }
+
 interface FormState {
   nombre: string; iniciales: string; telefono: string
   email: string;  niveles: string[]; activo: boolean
-  dispHoraInicio: string; dispHoraFin: string
+  horario: Record<string, DiaHorario>
 }
+
+const DIAS = [
+  { key: 'L', label: 'Lunes' }, { key: 'M', label: 'Martes' }, { key: 'X', label: 'Miércoles' },
+  { key: 'J', label: 'Jueves' }, { key: 'V', label: 'Viernes' }, { key: 'S', label: 'Sábado' },
+]
+
+const horarioVacio = (): Record<string, DiaHorario> =>
+  Object.fromEntries(DIAS.map(d => [d.key, { asiste: false, horaInicio: '', horaFin: '' }]))
 
 const initForm = (): FormState => ({
   nombre: '', iniciales: '', telefono: '', email: '', niveles: [], activo: true,
-  dispHoraInicio: '', dispHoraFin: '',
+  horario: horarioVacio(),
 })
+
+/** Copia la hora del primer día marcado a los demás: casi siempre son iguales. */
+function replicarHorario() {
+  const base = DIAS.map(d => form.value.horario[d.key]).find(h => h.asiste && h.horaInicio && h.horaFin)
+  if (!base) { errorMsg.value = 'Primero captura el horario de un día'; return }
+  for (const d of DIAS) {
+    const h = form.value.horario[d.key]
+    if (h.asiste) { h.horaInicio = base.horaInicio; h.horaFin = base.horaFin }
+  }
+}
 const form = ref<FormState>(initForm())
 const editandoId = ref<string | null>(null)
 
@@ -90,10 +115,14 @@ function abrirNuevo() {
 
 function abrirEditar(i: Instructor) {
   editandoId.value = i.id
+  const horario = horarioVacio()
+  for (const [dia, rango] of Object.entries(i.horarioPorDia ?? {})) {
+    if (horario[dia]) horario[dia] = { asiste: true, horaInicio: rango.horaInicio, horaFin: rango.horaFin }
+  }
   form.value = {
     nombre: i.nombre, iniciales: i.iniciales, telefono: i.telefono,
     email: i.email ?? '', niveles: [...i.niveles], activo: i.activo,
-    dispHoraInicio: i.dispHoraInicio ?? '', dispHoraFin: i.dispHoraFin ?? '',
+    horario,
   }
   errorMsg.value = ''
   dialogOpen.value = true
@@ -103,8 +132,17 @@ async function guardar() {
   const { valid } = await formRef.value!.validate()
   if (!valid) return
   if (form.value.niveles.length === 0) { errorMsg.value = 'Selecciona al menos una modalidad'; return }
-  if (form.value.dispHoraInicio && form.value.dispHoraFin && form.value.dispHoraFin <= form.value.dispHoraInicio) {
-    errorMsg.value = 'La hora de fin debe ser mayor a la de inicio'; return
+
+  // Cada día marcado tiene que traer sus dos horas y en orden
+  for (const d of DIAS) {
+    const h = form.value.horario[d.key]
+    if (!h.asiste) continue
+    if (!h.horaInicio || !h.horaFin) {
+      errorMsg.value = `Falta el horario del ${d.label.toLowerCase()}`; return
+    }
+    if (h.horaFin <= h.horaInicio) {
+      errorMsg.value = `En ${d.label.toLowerCase()}, la salida debe ser posterior a la entrada`; return
+    }
   }
 
   guardando.value = true
@@ -116,8 +154,14 @@ async function guardar() {
     email:          form.value.email.trim() || null,
     niveles:        form.value.niveles,
     sucursales:     [sucursalStore.sucursalActivaId],
-    dispHoraInicio: form.value.dispHoraInicio || null,
-    dispHoraFin:    form.value.dispHoraFin || null,
+    // Solo viajan los días marcados: un día ausente significa que no viene
+    horarioPorDia: Object.fromEntries(
+      DIAS.filter(d => form.value.horario[d.key].asiste)
+          .map(d => [d.key, {
+            horaInicio: form.value.horario[d.key].horaInicio,
+            horaFin:    form.value.horario[d.key].horaFin,
+          }])
+    ),
   }
   try {
     if (editandoId.value) {
@@ -194,6 +238,7 @@ onMounted(() => { cargar(); cargarModalidades() })
 
 <template>
   <div class="d-flex flex-column ga-4">
+    <SoloLectura modulo="instructores" detalle="dar de alta ni editar maestros" />
 
     <!-- Stats -->
     <v-row dense>
@@ -231,7 +276,7 @@ onMounted(() => { cargar(); cargarModalidades() })
             style="max-width:160px"
           />
           <v-spacer />
-          <v-btn color="primary" prepend-icon="mdi-plus" rounded="lg" @click="abrirNuevo">
+          <v-btn v-if="puedeEditar" color="primary" prepend-icon="mdi-plus" rounded="lg" @click="abrirNuevo">
             Nuevo instructor
           </v-btn>
         </div>
@@ -300,13 +345,14 @@ onMounted(() => { cargar(); cargarModalidades() })
       <template #item.acciones="{ item }">
         <div class="d-flex align-center justify-end ga-1">
           <v-btn
+            v-if="puedeEditar"
             icon="mdi-pencil-outline" size="small" variant="text"
             color="grey" title="Editar instructor"
             :disabled="!!procesandoId"
             @click="abrirEditar(item)"
           />
           <v-btn
-            v-if="item.activo"
+            v-if="item.activo && puedeEditar"
             icon="mdi-account-off-outline" size="small" variant="text"
             color="error" title="Inactivar instructor"
             :loading="procesandoId === item.id"
@@ -315,6 +361,7 @@ onMounted(() => { cargar(); cargarModalidades() })
           />
           <template v-else>
             <v-btn
+              v-if="puedeEditar"
               icon="mdi-account-check-outline" size="small" variant="text"
               color="success" title="Reactivar instructor"
               :loading="procesandoId === item.id"
@@ -322,6 +369,7 @@ onMounted(() => { cargar(); cargarModalidades() })
               @click="reactivar(item)"
             />
             <v-btn
+              v-if="puedeEditar"
               icon="mdi-delete-outline" size="small" variant="text"
               color="error" title="Eliminar definitivamente"
               :disabled="!!procesandoId"
@@ -381,26 +429,45 @@ onMounted(() => { cargar(); cargarModalidades() })
               />
             </v-col>
 
-            <v-col cols="12"><p class="section-label mt-2">Horario disponible</p></v-col>
-            <v-col cols="6">
-              <v-text-field
-                v-model="form.dispHoraInicio"
-                label="Desde"
-                type="time"
-                variant="outlined" density="compact" rounded="lg" hide-details
-              />
-            </v-col>
-            <v-col cols="6">
-              <v-text-field
-                v-model="form.dispHoraFin"
-                label="Hasta"
-                type="time"
-                variant="outlined" density="compact" rounded="lg" hide-details
-              />
+            <v-col cols="12" class="d-flex align-center justify-space-between mt-2">
+              <p class="section-label">Horario por día</p>
+              <v-btn
+                size="x-small" variant="text" color="primary"
+                prepend-icon="mdi-content-copy"
+                title="Copiar el horario del primer día marcado a los demás"
+                @click="replicarHorario"
+              >Igualar días</v-btn>
             </v-col>
             <v-col cols="12">
-              <div style="font-size:11px;color:#9ca3af">
-                Define el rango en que el instructor puede recibir clases. Vacío = disponible toda la cuadrícula.
+              <div class="d-flex flex-column ga-1">
+                <div
+                  v-for="d in DIAS" :key="d.key"
+                  class="d-flex align-center ga-3"
+                  style="padding:2px 0"
+                >
+                  <v-checkbox
+                    v-model="form.horario[d.key].asiste"
+                    :label="d.label"
+                    density="compact" color="#0e3b33" hide-details
+                    style="min-width:132px;flex:0 0 auto"
+                  />
+                  <v-text-field
+                    v-model="form.horario[d.key].horaInicio"
+                    type="time" label="Entra"
+                    :disabled="!form.horario[d.key].asiste"
+                    variant="outlined" density="compact" rounded="lg" hide-details
+                  />
+                  <v-text-field
+                    v-model="form.horario[d.key].horaFin"
+                    type="time" label="Sale"
+                    :disabled="!form.horario[d.key].asiste"
+                    variant="outlined" density="compact" rounded="lg" hide-details
+                  />
+                </div>
+              </div>
+              <div style="font-size:11px;color:#9ca3af" class="mt-2">
+                Los días sin marcar son días que no viene: el sistema no dejará
+                asignarle clases ahí. Si no marcas ninguno, queda sin restricción.
               </div>
             </v-col>
 

@@ -12,6 +12,9 @@ use Beluga\Application\Actions\Alumnos\ObtenerAlumnoAction;
 use Beluga\Application\Actions\Alumnos\CrearAlumnoAction;
 use Beluga\Application\Actions\Alumnos\ActualizarAlumnoAction;
 use Beluga\Application\Actions\Alumnos\EliminarAlumnoAction;
+use Beluga\Application\Actions\Alumnos\CrearProgramaAction;
+use Beluga\Application\Actions\Alumnos\ActualizarProgramaAction;
+use Beluga\Application\Actions\Alumnos\BajaProgramaAction;
 use Beluga\Application\Actions\Instructores\ListarInstructoresAction;
 use Beluga\Application\Actions\Instructores\CrearInstructorAction;
 use Beluga\Application\Actions\Instructores\ActualizarInstructorAction;
@@ -34,11 +37,18 @@ use Beluga\Application\Actions\Cobros\GenerarCobrosAction;
 use Beluga\Application\Actions\Cobros\ListarCobrosAction;
 use Beluga\Application\Actions\Cobros\ObtenerCobroAction;
 use Beluga\Application\Actions\Cobros\RegistrarAbonoAction;
+use Beluga\Application\Actions\Cobros\PagoAdelantadoAction;
 use Beluga\Application\Actions\Cobros\ObtenerPagosCobroAction;
 use Beluga\Application\Actions\Cobros\MarcarFacturaAction;
+use Beluga\Application\Actions\Cobros\CondonarCobroAction;
+use Beluga\Application\Actions\Alumnos\CambiarDiaPagoAction;
+use Beluga\Application\Actions\Alumnos\ReactivarProgramaAction;
+use Beluga\Application\Actions\Alumnos\ObtenerDatosFiscalesAction;
+use Beluga\Application\Actions\Alumnos\GuardarDatosFiscalesAction;
 use Beluga\Application\Actions\Usuarios\ListarUsuariosAction;
 use Beluga\Application\Actions\Usuarios\CrearUsuarioAction;
 use Beluga\Application\Actions\Usuarios\ActualizarUsuarioAction;
+use Beluga\Application\Actions\Usuarios\EliminarUsuarioAction;
 use Beluga\Application\Actions\Sucursales\ListarSucursalesAction;
 use Beluga\Application\Actions\Modalidades\ListarModalidadesAction;
 use Beluga\Application\Actions\Slots\ListarSlotsAction;
@@ -69,7 +79,13 @@ use Beluga\Application\Actions\Reportes\CarteraAction;
 use Beluga\Application\Actions\Reportes\AsistenciaReporteAction;
 use Beluga\Application\Actions\Reportes\OcupacionAction;
 use Beluga\Application\Actions\Public\ObtenerAlumnoQrAction;
+use Beluga\Application\Actions\Ausencias\RegistrarAusenciaAction;
+use Beluga\Application\Actions\Ausencias\AnularAusenciaAction;
+use Beluga\Application\Actions\Reportes\ReposicionesReporteAction;
+use Beluga\Application\Actions\Reportes\PrealumnosReporteAction;
 use Beluga\Application\Middleware\AuthMiddleware;
+use Beluga\Application\Middleware\PermisosMiddleware;
+use Beluga\Application\Actions\Auth\MisPermisosAction;
 
 return function (App $app): void {
 
@@ -100,6 +116,15 @@ return function (App $app): void {
             $g->put('/{folio}',           ActualizarAlumnoAction::class);
             $g->get('/{folio}/horario',   ObtenerHorarioAlumnoAction::class);
             $g->delete('/{folio}',        EliminarAlumnoAction::class);
+            // Programas (multimodalidad)
+            $g->post('/{folio}/programas',        CrearProgramaAction::class);
+            $g->put('/programas/{id}',            ActualizarProgramaAction::class);
+            $g->post('/programas/{id}/baja',      BajaProgramaAction::class);
+            $g->put('/programas/{id}/dia-pago',   CambiarDiaPagoAction::class);
+            $g->post('/programas/{id}/reactivar', ReactivarProgramaAction::class);
+            // Datos de facturación del alumno
+            $g->get('/{folio}/datos-fiscales', ObtenerDatosFiscalesAction::class);
+            $g->put('/{folio}/datos-fiscales', GuardarDatosFiscalesAction::class);
         });
 
         // Instructores
@@ -143,10 +168,17 @@ return function (App $app): void {
         $group->group('/cobros', function (RouteCollectorProxy $g) {
             $g->get('',              ListarCobrosAction::class);
             $g->post('/generar',     GenerarCobrosAction::class);
+            $g->post('/adelantado',  PagoAdelantadoAction::class);
             $g->get('/{id}',         ObtenerCobroAction::class);
             $g->get('/{id}/pagos',   ObtenerPagosCobroAction::class);
             $g->post('/{id}/abonos', RegistrarAbonoAction::class);
             $g->put('/{id}/factura', MarcarFacturaAction::class);
+            // "No pedir cobro": condona el mes con motivo
+            $g->post('/{id}/condonar', CondonarCobroAction::class);
+            // El ticket se imprime en el cliente, por el diálogo del navegador
+            // (frontend/src/utils/ticket58.ts). El servidor no participa en la
+            // impresión: mandarle texto ESC/POS a la térmica exigiría un
+            // programa instalado en cada caja, y se descartó por ese costo.
         });
 
         // Sucursales
@@ -202,20 +234,38 @@ return function (App $app): void {
             $g->post('', RegistrarAsistenciaAction::class);
         });
 
+        // Ausencias: avisar que un alumno no viene a una clase
+        $group->group('/ausencias', function (RouteCollectorProxy $g) {
+            $g->post('',        RegistrarAusenciaAction::class);
+            $g->delete('/{id}', AnularAusenciaAction::class);
+        });
+
         // Reportes
         $group->group('/reportes', function (RouteCollectorProxy $g) {
-            $g->get('/ingresos',   IngresosAction::class);            // ?sucursal=&desde=&hasta=
-            $g->get('/cartera',    CarteraAction::class);             // ?sucursal=
-            $g->get('/asistencia', AsistenciaReporteAction::class);   // ?sucursal=&desde=&hasta=
-            $g->get('/ocupacion',  OcupacionAction::class);           // ?sucursal=
+            $g->get('/ingresos',     IngresosAction::class);            // ?sucursal=&desde=&hasta=
+            $g->get('/cartera',      CarteraAction::class);             // ?sucursal=
+            $g->get('/asistencia',   AsistenciaReporteAction::class);   // ?sucursal=&desde=&hasta=
+            $g->get('/ocupacion',    OcupacionAction::class);           // ?sucursal=
+            $g->get('/reposiciones', ReposicionesReporteAction::class); // ?sucursal=&desde=&hasta=&derecho=si|no
+            $g->get('/prealumnos',   PrealumnosReporteAction::class);   // ?sucursal=&desde=&hasta=
         });
 
         // Usuarios del sistema
         $group->group('/usuarios', function (RouteCollectorProxy $g) {
-            $g->get('',        ListarUsuariosAction::class);
-            $g->post('',       CrearUsuarioAction::class);
-            $g->put('/{id}',   ActualizarUsuarioAction::class);
+            $g->get('',         ListarUsuariosAction::class);   // ?inactivos=1
+            $g->post('',        CrearUsuarioAction::class);
+            $g->put('/{id}',    ActualizarUsuarioAction::class);
+            $g->delete('/{id}', EliminarUsuarioAction::class);
         });
 
-    })->add(AuthMiddleware::class);
+        // Permisos del usuario con la sesión abierta, para que el frontend
+        // sepa qué menús pintar. No decide nada: la validación real la hace
+        // PermisosMiddleware en cada petición.
+        $group->get('/permisos', MisPermisosAction::class);
+
+    // Slim corre los middleware en orden inverso al que se agregan: primero
+    // AuthMiddleware (que deja el rol en la petición) y luego el de permisos,
+    // que lo necesita.
+    })->add(PermisosMiddleware::class)
+      ->add(AuthMiddleware::class);
 };

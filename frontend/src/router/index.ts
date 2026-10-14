@@ -47,13 +47,20 @@ const router = createRouter({
           path: 'alumnos/:folio',
           name: 'alumno-detalle',
           component: () => import('@/views/personas/AlumnoDetalleView.vue'),
-          meta: { titulo: 'Detalle del Alumno', seccion: 'personas' },
+          // Hereda los permisos de Alumnos: no es un menú aparte
+          meta: { titulo: 'Detalle del Alumno', seccion: 'personas', modulo: 'alumnos' },
         },
         {
           path: 'instructores',
           name: 'instructores',
           component: () => import('@/views/personas/InstructoresView.vue'),
           meta: { titulo: 'Instructores', seccion: 'personas' },
+        },
+        {
+          path: 'cumpleanos',
+          name: 'cumpleanos',
+          component: () => import('@/views/personas/CumpleanosView.vue'),
+          meta: { titulo: 'Cumpleañeros', seccion: 'personas' },
         },
 
         // ── Finanzas ──────────────────────────────────────────────────────
@@ -101,7 +108,9 @@ const router = createRouter({
           path: 'config/horarios',
           name: 'horarios',
           component: () => import('@/views/config/HorariosView.vue'),
-          meta: { titulo: 'Gestión de Horarios', seccion: 'config' },
+          // El nombre de la ruta dice 'horarios' por historia; en la matriz de
+          // permisos este menú es 'parametros'
+          meta: { titulo: 'Parámetros generales', seccion: 'config', modulo: 'parametros' },
         },
 
         // ── Premium ───────────────────────────────────────────────────────
@@ -144,13 +153,48 @@ const router = createRouter({
   ],
 })
 
-router.beforeEach((to) => {
+/**
+ * Orden en que se busca a dónde mandar a un rol que no tiene Dashboard.
+ * Sigue el orden del menú: cae en lo primero que pueda ver.
+ */
+const DESTINOS = [
+  'dashboard', 'calendario', 'asistencia', 'reposiciones',
+  'alumnos', 'instructores', 'cumpleanos', 'cobranza',
+  'reportes', 'usuarios', 'catalogos', 'parametros',
+] as const
+
+/** Primera pantalla que el rol tiene permitida. */
+function inicioDe(auth: ReturnType<typeof useAuthStore>): string {
+  return DESTINOS.find(m => auth.puedeVer(m)) ?? 'login'
+}
+
+router.beforeEach(async (to) => {
   const auth = useAuthStore()
+  // Sesión de 1 día vencida: limpiar token caduco antes de evaluar acceso
+  if (auth.token && auth.sesionExpirada()) {
+    auth.logout()
+  }
   if (!to.meta.publica && !auth.estaAutenticado) {
     return { name: 'login' }
   }
   if (to.name === 'login' && auth.estaAutenticado) {
-    return { name: 'dashboard' }
+    return { name: inicioDe(auth) }
+  }
+  if (to.meta.publica) return
+
+  // Al recargar la página los permisos vienen de localStorage; si no hay
+  // (primera vez, o se limpió el navegador) se piden antes de decidir.
+  if (Object.keys(auth.permisos).length === 0) {
+    await auth.cargarPermisos()
+  }
+
+  // El módulo que gobierna la ruta. Sin `modulo` la ruta no está sujeta a
+  // permisos (el detalle de alumno hereda el de Alumnos, por ejemplo).
+  const modulo = (to.meta.modulo as string | undefined) ?? (to.name as string)
+  if (modulo && !auth.puedeVer(modulo)) {
+    const destino = inicioDe(auth)
+    // Si tampoco puede ver su propio inicio, no hay a dónde mandarlo
+    return destino === (to.name as string) ? false : { name: destino }
   }
 })
 

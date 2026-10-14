@@ -12,7 +12,13 @@ use Psr\Log\LoggerInterface;
 class ActualizarConfiguracionAction extends Action
 {
     /** Solo se permiten estas claves desde la API. */
-    private const PERMITIDAS = ['horario_grid_inicio', 'horario_grid_fin', 'horario_cupo_grupal', 'reposicion_dias_vigencia'];
+    private const PERMITIDAS = [
+        'horario_grid_inicio', 'horario_grid_fin', 'horario_cupo_grupal',
+        'reposicion_dias_vigencia', 'ausencia_horas_aviso',
+    ];
+
+    /** El cliente lo quiso configurable, pero nunca por debajo de 2 horas. */
+    private const AVISO_MINIMO = 2.0;
 
     public function __construct(
         LoggerInterface $logger,
@@ -33,6 +39,21 @@ class ActualizarConfiguracionAction extends Action
             if (!in_array($clave, self::PERMITIDAS, true)) {
                 continue;
             }
+
+            // El piso se valida aquí, no solo en la UI: bajarlo de 2 horas
+            // dejaría pasar avisos de último minuto como si fueran con derecho.
+            if ($clave === 'ausencia_horas_aviso') {
+                if (!is_numeric($valor)) {
+                    return $this->error('El aviso mínimo debe ser un número de horas', 422);
+                }
+                if ((float) $valor < self::AVISO_MINIMO) {
+                    return $this->error(
+                        sprintf('El aviso mínimo no puede ser menor a %s horas', self::AVISO_MINIMO),
+                        422
+                    );
+                }
+            }
+
             $stmt->execute([':c' => $clave, ':v' => (string) $valor, ':v2' => (string) $valor]);
         }
 

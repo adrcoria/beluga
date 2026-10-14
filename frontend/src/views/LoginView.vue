@@ -2,11 +2,38 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useUiStore } from '@/stores/ui'
+import { useCobranza } from '@/composables/useCobranza'
 import { apiBase } from '@/composables/useApi'
 import logoUrl from '@/assets/logo.jpg'
 
 const router    = useRouter()
 const authStore = useAuthStore()
+const ui          = useUiStore()
+const cobranzaApi = useCobranza()
+
+// Entra al sistema: guarda sesión, sincroniza datos (genera cobros pendientes)
+// con overlay y luego navega al dashboard. Si la generación falla, no bloquea.
+async function entrar(usuario: any, token: string) {
+  authStore.login(usuario, token)
+  // Antes de navegar: sin los permisos cargados el router no sabe a qué
+  // pantalla mandar a un rol que no tiene Dashboard.
+  await authStore.cargarPermisos()
+
+  // Generar cobros es una escritura sobre Cobranza. Los roles que no cobran
+  // (instructor, coordinador) recibirían un 403; ni se intenta.
+  if (authStore.puedeEditar('cobranza')) {
+    ui.setSincronizando(true)
+    try {
+      await cobranzaApi.generarCobros()
+    } catch {
+      // ignoramos errores de sincronización; el ingreso no debe bloquearse
+    } finally {
+      ui.setSincronizando(false)
+    }
+  }
+  router.push('/')
+}
 
 // ── Pasos del flujo ───────────────────────────────────────────────────────
 type Paso = 'credenciales' | 'otp' | 'nueva-password'
@@ -76,8 +103,7 @@ async function iniciarSesion() {
     }
 
     if (data.step === 'login_ok') {
-      authStore.login(data.usuario, data.token)
-      router.push('/')
+      await entrar(data.usuario, data.token)
       return
     }
 
@@ -111,8 +137,7 @@ async function verificarOtp() {
       usuarioTemporal.value = data.usuario
       paso.value            = 'nueva-password'
     } else {
-      authStore.login(data.usuario, data.token)
-      router.push('/')
+      await entrar(data.usuario, data.token)
     }
   } catch (e: any) {
     error.value = e.message
@@ -143,8 +168,7 @@ async function cambiarPassword() {
     const data = await res.json()
     if (!res.ok) throw new Error(data.error ?? 'Error al cambiar contraseña')
 
-    authStore.login(usuarioTemporal.value, tokenTemporal.value)
-    router.push('/')
+    await entrar(usuarioTemporal.value, tokenTemporal.value)
   } catch (e: any) {
     error.value = e.message
   } finally {
