@@ -17,12 +17,46 @@ export interface Cartera {
   cartera: { folio: string; nombre: string; telefono: string | null; pendiente: number; desde: string; diasMora: number; cobros: number }[]
 }
 
+/**
+ * Asistencia medida contra lo programado: no cuenta escaneos sueltos sino
+ * clases esperadas frente a clases a las que el alumno se presentó.
+ */
 export interface AsistenciaReporte {
   desde: string
   hasta: string
-  total: number
-  porDia: { fecha: string; total: number }[]
-  ausentes: { folio: string; nombre: string; ultima: string | null }[]
+  resumen: {
+    clases: number
+    asistieron: number
+    /** Faltó, pero avisó con anticipación */
+    avisaron: number
+    /** Faltó sin avisar */
+    faltaron: number
+    /** Clases de días que todavía no cierran */
+    pendientes: number
+    porcentajeAsistencia: number | null
+  }
+  porDia: {
+    fecha: string
+    clases: number
+    asistieron: number
+    avisaron: number
+    faltaron: number
+    pendientes: number
+  }[]
+  alumnos: {
+    folio: string
+    nombre: string
+    telefono: string | null
+    clases: number
+    asistio: number
+    aviso: number
+    falto: number
+    pendiente: number
+    ultima: string | null
+    porcentaje: number | null
+  }[]
+  /** Activos que no se presentaron ni una vez en el periodo */
+  ausentes: { folio: string; nombre: string; telefono: string | null; ultima: string | null }[]
 }
 
 export interface Ocupacion {

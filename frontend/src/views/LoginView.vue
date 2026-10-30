@@ -84,6 +84,47 @@ const cargando = ref(false)
 
 const STORAGE_KEY = 'beluga_remembered'
 
+/**
+ * Lee la respuesta sin asumir que es JSON.
+ *
+ * Cuando el servidor truena antes de llegar a la aplicación (error de PHP,
+ * de Apache, una página de error del hosting) la respuesta no es JSON, y
+ * `res.json()` reventaba con "Unexpected end of JSON input": un mensaje que
+ * no dice nada del problema real. Aquí se muestra el código HTTP y lo que
+ * el servidor haya contestado.
+ */
+async function leerRespuesta(res: Response, fallback: string): Promise<any> {
+  const crudo = (await res.text()).trim()
+
+  // Cuerpo vacío: típico de un error fatal de PHP, que no alcanza a escribir nada
+  if (crudo === '') {
+    throw new Error(
+      `El servidor respondió HTTP ${res.status} con el cuerpo vacío. ` +
+      'Suele ser un error fatal de PHP; revisa el log de errores del hosting.'
+    )
+  }
+
+  let data: any
+  try {
+    data = JSON.parse(crudo)
+  } catch {
+    // No era JSON: se muestra el texto, sin etiquetas HTML
+    const texto = crudo
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    throw new Error(
+      `El servidor respondió HTTP ${res.status} sin JSON. ` +
+      (texto ? `Dice: "${texto.slice(0, 300)}"` : 'La respuesta no traía texto legible.')
+    )
+  }
+
+  if (!res.ok) throw new Error(data.error ?? `${fallback} (HTTP ${res.status})`)
+  return data
+}
+
 // ── Paso 1: iniciar sesión ────────────────────────────────────────────────
 async function iniciarSesion() {
   error.value = ''; cargando.value = true
@@ -93,8 +134,7 @@ async function iniciarSesion() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email: email.value, password: password.value }),
     })
-    const data = await res.json()
-    if (!res.ok) throw new Error(data.error ?? 'Credenciales incorrectas')
+    const data = await leerRespuesta(res, 'Credenciales incorrectas')
 
     if (recordar.value) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ email: email.value, password: password.value }))
@@ -127,8 +167,7 @@ async function verificarOtp() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ otpToken: otpToken.value, codigo: codigoOtp.value }),
     })
-    const data = await res.json()
-    if (!res.ok) throw new Error(data.error ?? 'Código incorrecto')
+    const data = await leerRespuesta(res, 'Código incorrecto')
 
     clearInterval(timerOtp!)
 
@@ -165,8 +204,7 @@ async function cambiarPassword() {
       },
       body: JSON.stringify({ passwordNueva: nuevaPassword.value }),
     })
-    const data = await res.json()
-    if (!res.ok) throw new Error(data.error ?? 'Error al cambiar contraseña')
+    await leerRespuesta(res, 'Error al cambiar contraseña')
 
     await entrar(usuarioTemporal.value, tokenTemporal.value)
   } catch (e: any) {

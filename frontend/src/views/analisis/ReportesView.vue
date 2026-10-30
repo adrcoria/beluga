@@ -82,7 +82,8 @@ function exportarCartera() {
 }
 function exportarAusentes() {
   exportar((asistencia.value?.ausentes ?? []).map(a => ({
-    Folio: a.folio, Alumno: a.nombre, 'Última asistencia': a.ultima ?? 'Nunca',
+    Folio: a.folio, Alumno: a.nombre, Teléfono: a.telefono ?? '',
+    'Última asistencia': a.ultima ?? 'Nunca',
   })), 'ausentismo')
 }
 function exportarOcupacion() {
@@ -118,7 +119,25 @@ function exportarPrealumnos() {
   })), 'prealumnos')
 }
 
-const maxDia = computed(() => Math.max(1, ...(asistencia.value?.porDia.map(d => d.total) ?? [1])))
+function exportarAsistenciaAlumnos() {
+  exportar((asistencia.value?.alumnos ?? []).map(a => ({
+    Folio:    a.folio,
+    Alumno:   a.nombre,
+    Teléfono: a.telefono ?? '',
+    'Clases programadas': a.clases,
+    Asistió:  a.asistio,
+    'Faltó avisando': a.aviso,
+    'Faltó sin avisar': a.falto,
+    'Sin registrar': a.pendiente,
+    '% asistencia': a.porcentaje ?? '',
+    'Última asistencia': a.ultima ?? 'Nunca',
+  })), 'asistencia_por_alumno')
+}
+
+// La barra más alta del periodo, para escalar la gráfica
+const maxDia = computed(() =>
+  Math.max(1, ...(asistencia.value?.porDia.map(d => d.clases) ?? [1]))
+)
 </script>
 
 <template>
@@ -230,20 +249,112 @@ const maxDia = computed(() => Math.max(1, ...(asistencia.value?.porDia.map(d => 
 
     <!-- ── ASISTENCIA ────────────────────────────────────────────────────── -->
     <template v-else-if="tab === 'asistencia' && asistencia">
+      <!-- Resumen del periodo -->
+      <v-row dense>
+        <v-col cols="6" sm="3">
+          <v-card rounded="xl" border><v-card-text class="pa-4">
+            <div class="lbl">Clases programadas</div>
+            <div class="num" style="color:#0a1e6e">{{ asistencia.resumen.clases }}</div>
+          </v-card-text></v-card>
+        </v-col>
+        <v-col cols="6" sm="3">
+          <v-card rounded="xl" border><v-card-text class="pa-4">
+            <div class="lbl">Asistieron</div>
+            <div class="num" style="color:#047857">{{ asistencia.resumen.asistieron }}</div>
+          </v-card-text></v-card>
+        </v-col>
+        <v-col cols="6" sm="3">
+          <v-card rounded="xl" border><v-card-text class="pa-4">
+            <div class="lbl">Faltaron avisando</div>
+            <div class="num" style="color:#b45309">{{ asistencia.resumen.avisaron }}</div>
+          </v-card-text></v-card>
+        </v-col>
+        <v-col cols="6" sm="3">
+          <v-card rounded="xl" border><v-card-text class="pa-4">
+            <div class="lbl">Faltaron sin avisar</div>
+            <div class="num" style="color:#b91c1c">{{ asistencia.resumen.faltaron }}</div>
+          </v-card-text></v-card>
+        </v-col>
+      </v-row>
+
       <v-card rounded="xl" border>
         <v-card-text class="pa-4">
-          <div class="lbl mb-1">Asistencias en el periodo</div>
-          <div class="num" style="color:#0a1e6e">{{ asistencia.total }}</div>
-          <!-- mini gráfica de barras -->
-          <div class="d-flex align-end ga-1 mt-3" style="height:90px">
-            <div v-for="d in asistencia.porDia" :key="d.fecha" class="d-flex flex-column align-center" style="flex:1;min-width:14px">
-              <div :style="{ height: (d.total / maxDia * 70) + 'px', width:'100%', background:'#1a3fe8', borderRadius:'3px 3px 0 0', minHeight:'2px' }" :title="`${d.fecha}: ${d.total}`"></div>
+          <div class="d-flex align-center justify-space-between mb-1">
+            <span class="lbl">Asistencia del periodo</span>
+            <span v-if="asistencia.resumen.porcentajeAsistencia !== null"
+              class="num" style="color:#1a3fe8;font-size:26px">
+              {{ asistencia.resumen.porcentajeAsistencia }}%
+            </span>
+          </div>
+          <div v-if="asistencia.resumen.pendientes" style="font-size:11.5px;color:#9ca3af">
+            {{ asistencia.resumen.pendientes }} clases de días que aún no cierran no entran en el porcentaje.
+          </div>
+
+          <!-- Barras apiladas por día: asistieron / avisaron / faltaron -->
+          <div class="d-flex align-end ga-1 mt-3" style="height:100px">
+            <div v-for="d in asistencia.porDia" :key="d.fecha"
+              class="d-flex flex-column align-center" style="flex:1;min-width:14px">
+              <div class="d-flex flex-column justify-end" style="width:100%;height:80px"
+                :title="`${d.fecha} — ${d.asistieron} asistieron, ${d.avisaron} avisaron, ${d.faltaron} faltaron`">
+                <div :style="{ height: (d.faltaron / maxDia * 76) + 'px', width:'100%', background:'#ef4444' }"></div>
+                <div :style="{ height: (d.avisaron / maxDia * 76) + 'px', width:'100%', background:'#f59e0b' }"></div>
+                <div :style="{ height: (d.asistieron / maxDia * 76) + 'px', width:'100%', background:'#10b981', borderRadius:'0 0 3px 3px' }"></div>
+              </div>
               <div style="font-size:8px;color:#9ca3af;margin-top:2px">{{ d.fecha.slice(8, 10) }}</div>
             </div>
-            <div v-if="!asistencia.porDia.length" class="text-medium-emphasis" style="font-size:13px">Sin asistencias en el periodo</div>
+            <div v-if="!asistencia.porDia.length" class="text-medium-emphasis" style="font-size:13px">
+              No había clases programadas en el periodo
+            </div>
+          </div>
+
+          <div v-if="asistencia.porDia.length" class="d-flex ga-4 mt-2" style="font-size:11px;color:#6b7280">
+            <span><span class="punto" style="background:#10b981"></span> Asistieron</span>
+            <span><span class="punto" style="background:#f59e0b"></span> Avisaron</span>
+            <span><span class="punto" style="background:#ef4444"></span> Faltaron</span>
           </div>
         </v-card-text>
       </v-card>
+
+      <!-- Por alumno, los más faltistas primero -->
+      <v-card rounded="xl" border>
+        <div class="d-flex align-center justify-space-between pa-3" style="border-bottom:1px solid #f1f5f9">
+          <span class="lbl">Por alumno ({{ asistencia.alumnos.length }})</span>
+          <v-btn size="small" variant="outlined" rounded="lg" prepend-icon="mdi-microsoft-excel"
+            @click="exportarAsistenciaAlumnos">Excel</v-btn>
+        </div>
+        <v-table density="compact">
+          <thead><tr>
+            <th class="ch">Alumno</th>
+            <th class="ch text-center">Clases</th>
+            <th class="ch text-center">Asistió</th>
+            <th class="ch text-center">Avisó</th>
+            <th class="ch text-center">Faltó</th>
+            <th class="ch text-center">%</th>
+          </tr></thead>
+          <tbody>
+            <tr v-if="!asistencia.alumnos.length">
+              <td colspan="6" class="text-center py-8 text-medium-emphasis">Sin clases en el periodo</td>
+            </tr>
+            <tr v-for="a in asistencia.alumnos" :key="a.folio">
+              <td style="font-size:13px;color:#0a1e6e;font-weight:600">
+                {{ a.nombre }} <span style="color:#9ca3af;font-weight:400">#{{ a.folio }}</span>
+              </td>
+              <td class="text-center" style="font-size:13px;color:#374151">{{ a.clases }}</td>
+              <td class="text-center" style="font-size:13px;color:#047857;font-weight:700">{{ a.asistio }}</td>
+              <td class="text-center" style="font-size:13px;color:#b45309;font-weight:700">{{ a.aviso || '—' }}</td>
+              <td class="text-center" style="font-size:13px;color:#b91c1c;font-weight:700">{{ a.falto || '—' }}</td>
+              <td class="text-center">
+                <v-chip v-if="a.porcentaje !== null" size="x-small" label variant="tonal"
+                  :color="a.porcentaje >= 80 ? 'success' : a.porcentaje >= 50 ? 'warning' : 'error'">
+                  {{ a.porcentaje }}%
+                </v-chip>
+                <span v-else style="color:#9ca3af;font-size:12px">—</span>
+              </td>
+            </tr>
+          </tbody>
+        </v-table>
+      </v-card>
+
       <v-card rounded="xl" border>
         <div class="d-flex align-center justify-space-between pa-3" style="border-bottom:1px solid #f1f5f9">
           <span class="lbl">Ausentismo — activos sin asistir en el periodo ({{ asistencia.ausentes.length }})</span>
@@ -456,4 +567,5 @@ const maxDia = computed(() => Math.max(1, ...(asistencia.value?.porDia.map(d => 
 .num { font-size:30px; font-weight:900; font-family:'Fraunces',serif; line-height:1.1; }
 .sub { font-size:11px; color:#9ca3af; margin-top:2px; }
 .ch  { color:#9ca3af; font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; }
+.punto { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:4px; vertical-align:middle; }
 </style>

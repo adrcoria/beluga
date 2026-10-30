@@ -306,7 +306,7 @@ class HorarioMySqlRepository implements HorarioRepository
 
         // 1. Instructor ocupado en esa franja
         $stmt = $this->pdo->prepare(
-            "SELECT COUNT(*) FROM horario_recurrente hr
+            "SELECT hr.vigente_desde, hr.vigente_hasta FROM horario_recurrente hr
              WHERE hr.instructor_id = :inst
                AND hr.dia = :dia
                AND hr.id <> :ex
@@ -320,7 +320,7 @@ class HorarioMySqlRepository implements HorarioRepository
             ':vh' => $vh ?? self::INFINITO, ':inf1' => self::INFINITO, ':vd' => $vd,
             ':hi1' => $d['horaInicio'], ':hi2' => $d['horaInicio'], ':dur1' => $d['duracionMin'] ?? 30,
         ]);
-        if ((int) $stmt->fetchColumn() > 0) {
+        if ($this->chocanDeVerdad($stmt->fetchAll(), $d['dia'], $vd, $vh)) {
             throw new RuntimeException('El instructor ya tiene una clase en ese horario', 409);
         }
 
@@ -329,7 +329,8 @@ class HorarioMySqlRepository implements HorarioRepository
         if (empty($folios)) return;
 
         $place = implode(',', array_fill(0, count($folios), '?'));
-        $sql = "SELECT COUNT(*) FROM horario_recurrente hr
+        $sql = "SELECT DISTINCT hr.vigente_desde, hr.vigente_hasta
+                FROM horario_recurrente hr
                 LEFT JOIN grupo_alumnos ga ON ga.grupo_id = hr.grupo_id
                 WHERE hr.dia = ?
                   AND hr.id <> ?
@@ -345,12 +346,53 @@ class HorarioMySqlRepository implements HorarioRepository
         );
         $stmt = $this->pdo->prepare($sql);
         $stmt->execute($params);
-        if ((int) $stmt->fetchColumn() > 0) {
+        if ($this->chocanDeVerdad($stmt->fetchAll(), $d['dia'], $vd, $vh)) {
             throw new RuntimeException('Un alumno ya tiene clase en ese horario', 409);
         }
 
         // 3. Ningún alumno puede superar las clases/semana de su plan EN ESTA MODALIDAD
         $this->validarLimiteSemanal($folios, $vd, $vh, $exclude, $d['modalidad']);
+    }
+
+    /**
+     * ¿Alguna de las reglas candidatas choca de verdad con la nueva?
+     *
+     * Que dos vigencias se traslapen en el calendario no basta: estas clases
+     * ocurren un solo día de la semana. Si a un alumno se le quitó la clase
+     * de los viernes cerrando su regla un miércoles, y la nueva empieza el
+     * lunes de esa misma semana, los rangos se tocan de lunes a miércoles
+     * — pero ahí no cae ningún viernes, así que las dos clases nunca
+     * coinciden en una fecha real.
+     *
+     * @param array<array{vigente_desde:string,vigente_hasta:?string}> $candidatas
+     */
+    private function chocanDeVerdad(array $candidatas, string $dia, string $vd, ?string $vh): bool
+    {
+        foreach ($candidatas as $c) {
+            $desde = max($c['vigente_desde'], $vd);
+            $hasta = min($c['vigente_hasta'] ?? self::INFINITO, $vh ?? self::INFINITO);
+
+            if ($desde <= $hasta && $this->caeAlgun($dia, $desde, $hasta)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** ¿Cae al menos un día de esa clase entre las dos fechas, inclusive? */
+    private function caeAlgun(string $dia, string $desde, string $hasta): bool
+    {
+        $objetivo = array_search($dia, ['L', 'M', 'X', 'J', 'V', 'S', 'D'], true);
+        if ($objetivo === false) {
+            return true;   // día desconocido: se prefiere bloquear
+        }
+
+        $ts = strtotime($desde);
+        // date('N'): 1 = lunes … 7 = domingo; el índice del arreglo es 0-based
+        $faltan  = (($objetivo + 1) - (int) date('N', $ts) + 7) % 7;
+        $primero = date('Y-m-d', strtotime("+$faltan days", $ts));
+
+        return $primero <= $hasta;
     }
 
     /**

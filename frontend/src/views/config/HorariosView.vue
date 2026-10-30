@@ -27,6 +27,11 @@ const form = ref({
   // Anticipación mínima para que una falta dé derecho a reposición.
   // El cliente pidió que fuera configurable, pero nunca menos de 2 horas.
   avisoHoras: 2,
+  // Ventana en la que vale el escaneo de entrada del alumno
+  asisAntes: 30,
+  asisRetardo: 20,
+  // Desde cuándo se lleva control: antes de esta fecha no se cierran días
+  asisDesde: '',
 })
 
 const AVISO_MINIMO = 2
@@ -48,7 +53,10 @@ async function cargar() {
     form.value.horaInicio = c.horario_grid_inicio ?? '08:00'
     form.value.horaFin    = c.horario_grid_fin    ?? '21:00'
     form.value.cupoGrupal = Number(c.horario_cupo_grupal ?? 6)
-    form.value.avisoHoras = Number(c.ausencia_horas_aviso ?? AVISO_MINIMO)
+    form.value.avisoHoras  = Number(c.ausencia_horas_aviso ?? AVISO_MINIMO)
+    form.value.asisAntes   = Number(c.asistencia_min_antes ?? 30)
+    form.value.asisRetardo = Number(c.asistencia_retardo_max ?? 20)
+    form.value.asisDesde   = String(c.asistencia_desde ?? '')
   } catch (e: any) {
     notifError('Error al cargar configuración', e.message)
   } finally {
@@ -97,7 +105,10 @@ async function guardar() {
       horario_grid_inicio: form.value.horaInicio,
       horario_grid_fin:    form.value.horaFin,
       horario_cupo_grupal: String(form.value.cupoGrupal),
-      ausencia_horas_aviso: String(form.value.avisoHoras),
+      ausencia_horas_aviso:   String(form.value.avisoHoras),
+      asistencia_min_antes:   String(form.value.asisAntes),
+      asistencia_retardo_max: String(form.value.asisRetardo),
+      asistencia_desde:       form.value.asisDesde,
     }
     await configApi.actualizar(payload)
     exito('Configuración guardada', 'Los cambios se aplican en el pizarrón del Calendario.')
@@ -153,6 +164,29 @@ async function guardar() {
               density="compact" variant="outlined" rounded="lg"
               :rules="[v => v >= AVISO_MINIMO || `Mínimo ${AVISO_MINIMO} horas`]" />
           </v-col>
+
+          <v-col cols="12"><p class="section-label mt-3">Registro de entrada (kiosco)</p></v-col>
+          <v-col cols="6">
+            <v-text-field v-model.number="form.asisAntes" label="Puede llegar antes"
+              type="number" min="0" max="180" suffix="min"
+              density="compact" variant="outlined" rounded="lg"
+              :rules="[v => v >= 0 || 'No puede ser negativo']" />
+          </v-col>
+          <v-col cols="6">
+            <v-text-field v-model.number="form.asisRetardo" label="Retardo máximo"
+              type="number" min="0" max="180" suffix="min"
+              density="compact" variant="outlined" rounded="lg"
+              hint="Después de que empieza la clase"
+              persistent-hint
+              :rules="[v => v >= 0 || 'No puede ser negativo']" />
+          </v-col>
+          <v-col cols="6">
+            <v-text-field v-model="form.asisDesde" label="Se lleva control desde"
+              type="date"
+              density="compact" variant="outlined" rounded="lg"
+              hint="Los días anteriores no se cierran"
+              persistent-hint />
+          </v-col>
         </v-row>
 
         <v-alert type="info" density="compact" variant="tonal" rounded="lg" class="mt-4" icon="mdi-information-outline">
@@ -163,6 +197,16 @@ async function guardar() {
           Si el alumno avisa su falta con <strong>{{ form.avisoHoras }} horas</strong> o más de anticipación, se le genera
           una reposición automáticamente. Con menos aviso pierde la clase. Las faltas ya registradas
           <strong>conservan</strong> el criterio con el que se resolvieron.
+        </v-alert>
+
+        <v-alert type="info" density="compact" variant="tonal" rounded="lg" class="mt-3" icon="mdi-qrcode-scan">
+          El escaneo de entrada cuenta desde <strong>{{ form.asisAntes }} minutos antes</strong> de su clase
+          y hasta <strong>{{ form.asisRetardo }} minutos después de que empieza</strong>.
+          Fuera de esa ventana <strong>no se registra</strong> y la pantalla explica por qué.
+          <template v-if="form.asisDesde">
+            Los días anteriores al <strong>{{ form.asisDesde }}</strong> no se cierran, para no marcar
+            faltas de cuando todavía no se llevaba control.
+          </template>
         </v-alert>
       </v-card-text>
 

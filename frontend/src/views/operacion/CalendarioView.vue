@@ -280,26 +280,49 @@ const ausenciasPorClase = computed<Map<string, Ausencia>>(() => {
   return mapa
 })
 
-/** El aviso de ausencia de esta celda en la fecha que se está viendo, si lo hay. */
-function ausenciaDeCelda(c: CeldaHorario): Ausencia | null {
+/** Los alumnos que ocupan esta celda: el individual, o los del grupo. */
+function foliosDeCelda(c: CeldaHorario): string[] {
+  return c.alumnoFolio ? [c.alumnoFolio] : c.grupoAlumnos.map(a => a.folio)
+}
+
+/** El aviso de un alumno concreto en esta celda, si lo hay. */
+function ausenciaDeAlumno(c: CeldaHorario, folio: string): Ausencia | null {
   if (c.esReposicion) return null
-  const folios = c.alumnoFolio ? [c.alumnoFolio] : c.grupoAlumnos.map(a => a.folio)
-  for (const folio of folios) {
-    const a = ausenciasPorClase.value.get(`${folio}|${fechaActiva.value}|${c.horaInicio}`)
-    if (a) return a
-  }
-  return null
+  return ausenciasPorClase.value.get(`${folio}|${fechaActiva.value}|${c.horaInicio}`) ?? null
+}
+
+/** Todos los avisos de la celda. En un grupo pueden faltar varios. */
+function ausenciasDeCelda(c: CeldaHorario): Ausencia[] {
+  if (c.esReposicion) return []
+  return foliosDeCelda(c)
+    .map(f => ausenciasPorClase.value.get(`${f}|${fechaActiva.value}|${c.horaInicio}`))
+    .filter((a): a is Ausencia => !!a)
+}
+
+/**
+ * El aviso de la celda cuando se la puede tratar como una sola unidad.
+ *
+ * En una clase individual es el aviso del alumno. En un grupo solo cuenta si
+ * faltan TODOS: si falta uno de seis la clase se da igual, y teñir la celda
+ * entera haría creer que no hay clase.
+ */
+function ausenciaDeCelda(c: CeldaHorario): Ausencia | null {
+  const avisos = ausenciasDeCelda(c)
+  if (!avisos.length) return null
+  return avisos.length === foliosDeCelda(c).length ? avisos[0] : null
 }
 
 /** Motivo de la falta si esta celda corresponde a la clase que el alumno perdió. */
 function faltaDeCelda(c: CeldaHorario): string | null {
   if (c.esReposicion) return null   // la reposición en sí no es una falta
-  const folios = c.alumnoFolio ? [c.alumnoFolio] : c.grupoAlumnos.map(a => a.folio)
-  for (const folio of folios) {
-    const motivo = faltasPorAlumnoDia.value.get(`${folio}|${c.dia}`)
-    if (motivo !== undefined) return motivo
-  }
-  return null
+  const folios  = foliosDeCelda(c)
+  const motivos = folios
+    .map(f => faltasPorAlumnoDia.value.get(`${f}|${c.dia}`))
+    .filter((m): m is string => m !== undefined)
+
+  // En un grupo, solo si la perdieron todos: si no, la clase sí se dio
+  if (!motivos.length) return null
+  return motivos.length === folios.length ? motivos[0] : null
 }
 
 /**
@@ -350,17 +373,37 @@ const horasParaClase = computed(() => {
 
 const avisoDaDerecho = computed(() => horasParaClase.value >= umbralHoras.value)
 
-function abrirAusencia() {
+// A quién se le va a registrar la falta. En una clase individual es el
+// alumno de la celda; en un grupo, el integrante que se eligió.
+const alumnoAusencia = ref<{ folio: string; nombre: string } | null>(null)
+
+function abrirAusencia(alumno?: { folio: string; nombre: string }) {
+  const c = celdaSel.value
+  if (!c) return
+
+  // Se exige el folio y no solo que venga algo: si este método se usa
+  // directo en un @click, Vue pasa el evento del clic como argumento y
+  // terminaríamos mandando un folio vacío al servidor.
+  const elegido = alumno?.folio ? alumno : null
+
+  alumnoAusencia.value = elegido
+    ?? (c.alumnoFolio ? { folio: c.alumnoFolio, nombre: c.alumnoNombre ?? c.alumnoFolio } : null)
+
+  if (!alumnoAusencia.value) {
+    notifError('No se pudo abrir', 'No se identificó al alumno de esta clase.')
+    return
+  }
   motivoAusencia.value = ''
   modalAusencia.value  = true
 }
 
 async function confirmarAusencia() {
-  if (!celdaSel.value?.alumnoFolio) return
+  const quien = alumnoAusencia.value
+  if (!quien || !celdaSel.value) return
   guardandoAus.value = true
   try {
     const a = await ausenciasApi.registrar({
-      alumnoFolio: celdaSel.value.alumnoFolio,
+      alumnoFolio: quien.folio,
       sucursalId:  sucursalId.value,
       fecha:       fechaActiva.value,
       horaClase:   celdaSel.value.horaInicio,
@@ -822,6 +865,12 @@ const modalidadesSelectOpts = computed(() =>
                       ✕ No viene<template v-if="ausenciaDeCelda(celdaEn(i.id, hora)!)!.conDerecho"> · repone</template>
                     </template>
                     <template v-else-if="faltaDeCelda(celdaEn(i.id, hora)!)">✕ Faltó</template>
+                    <!-- Grupo con algunos ausentes: la clase se da igual, así
+                         que no se tiñe la celda; solo se dice cuántos faltan -->
+                    <template v-else-if="ausenciasDeCelda(celdaEn(i.id, hora)!).length">
+                      ✕ {{ ausenciasDeCelda(celdaEn(i.id, hora)!).length }} no
+                      {{ ausenciasDeCelda(celdaEn(i.id, hora)!).length === 1 ? 'viene' : 'vienen' }}
+                    </template>
                     <template v-else-if="celdaEn(i.id, hora)!.esMuestra">★ Clase muestra</template>
                     <template v-else>{{ celdaEn(i.id, hora)!.modalidad }}<template v-if="celdaEn(i.id, hora)!.duracionMin >= 60"> · 60 min</template></template>
                   </span>
@@ -1061,11 +1110,42 @@ const modalidadesSelectOpts = computed(() =>
                 <span style="opacity:.6;margin-left:4px">{{ h.instructorIniciales }}</span>
               </v-chip>
             </div>
+            <!-- Integrantes del grupo: la falta es de cada quien, no de la clase -->
             <div v-if="celdaSel.grupoAlumnos.length" class="mt-3">
-              <div class="text-caption text-medium-emphasis mb-1">Alumnos del grupo</div>
-              <v-chip v-for="a in celdaSel.grupoAlumnos" :key="a.folio" size="small" class="mr-1 mb-1" variant="tonal">
-                {{ a.nombre }}
-              </v-chip>
+              <div class="text-caption text-medium-emphasis mb-1">
+                Alumnos del grupo
+                <span v-if="ausenciasDeCelda(celdaSel).length" style="color:#14532D;font-weight:700">
+                  · {{ ausenciasDeCelda(celdaSel).length }} no {{ ausenciasDeCelda(celdaSel).length === 1 ? 'viene' : 'vienen' }}
+                </span>
+              </div>
+
+              <div v-for="a in celdaSel.grupoAlumnos" :key="a.folio" class="integrante">
+                <div class="flex-grow-1" style="min-width:0">
+                  <span style="font-size:13px;font-weight:600;color:#0a1e6e">{{ a.nombre }}</span>
+                  <span style="font-size:11px;color:#9ca3af;margin-left:4px">#{{ a.folio }}</span>
+
+                  <div v-if="ausenciaDeAlumno(celdaSel, a.folio)" style="font-size:11px;margin-top:2px"
+                    :style="{ color: ausenciaDeAlumno(celdaSel, a.folio)!.conDerecho ? '#047857' : '#b45309' }">
+                    No viene · avisó con {{ ausenciaDeAlumno(celdaSel, a.folio)!.horasAviso.toFixed(1) }} h ·
+                    <template v-if="ausenciaDeAlumno(celdaSel, a.folio)!.conDerecho">repone</template>
+                    <template v-else>sin derecho</template>
+                  </div>
+                </div>
+
+                <v-btn
+                  v-if="puedeEditar && !ausenciaDeAlumno(celdaSel, a.folio)"
+                  size="x-small" variant="text" color="#14532D"
+                  prepend-icon="mdi-account-off-outline"
+                  @click="abrirAusencia({ folio: a.folio, nombre: a.nombre })"
+                >No viene</v-btn>
+
+                <v-btn
+                  v-else-if="puedeEditar"
+                  size="x-small" variant="text"
+                  prepend-icon="mdi-undo"
+                  @click="deshacerAusencia(ausenciaDeAlumno(celdaSel, a.folio)!)"
+                >Deshacer</v-btn>
+              </div>
             </div>
           </template>
 
@@ -1097,7 +1177,7 @@ const modalidadesSelectOpts = computed(() =>
           <v-btn
             v-if="!modoMover && puedeEditar && celdaSel.alumnoFolio && !celdaSel.esReposicion && !ausenciaDeCelda(celdaSel)"
             color="warning" variant="text" prepend-icon="mdi-account-clock-outline"
-            @click="abrirAusencia"
+            @click="abrirAusencia()"
           >No viene</v-btn>
           <v-spacer />
           <template v-if="!modoMover">
@@ -1120,8 +1200,9 @@ const modalidadesSelectOpts = computed(() =>
             El alumno no viene
           </div>
           <div style="font-size:13px;color:#6b7280;font-weight:400">
-            {{ celdaSel.alumnoNombre }} ·
+            {{ alumnoAusencia?.nombre ?? celdaSel.alumnoNombre }} ·
             {{ DIAS_SEMANA.find(d => d.key === celdaSel!.dia)?.label }} {{ celdaSel.horaInicio }}
+            <template v-if="celdaSel.grupoNombre"> · {{ celdaSel.grupoNombre }}</template>
           </div>
         </v-card-title>
         <v-divider />
@@ -1314,4 +1395,14 @@ thead .col-hora { z-index: 3; }
   font-size: 13px; color: #6b7280; padding: 7px 0; border-bottom: 1px solid #f3f4f6;
 }
 .info-row strong { color: #0a1e6e; }
+
+.integrante {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  margin-bottom: 4px;
+}
 </style>

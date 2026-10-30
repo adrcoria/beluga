@@ -15,6 +15,7 @@ class ActualizarConfiguracionAction extends Action
     private const PERMITIDAS = [
         'horario_grid_inicio', 'horario_grid_fin', 'horario_cupo_grupal',
         'reposicion_dias_vigencia', 'ausencia_horas_aviso',
+        'asistencia_min_antes', 'asistencia_retardo_max', 'asistencia_desde',
     ];
 
     /** El cliente lo quiso configurable, pero nunca por debajo de 2 horas. */

@@ -58,6 +58,15 @@ MENU_A_MODULO = {
 
 NIVEL = {'Total': 'total', 'Solo ver': 'ver', 'Sin acceso': 'no'}
 
+# Excepciones pedidas después de que el cliente llenó el Excel. Se aplican
+# encima de la matriz, y van aquí para que regenerar no las borre.
+#
+#   asistencia: el kiosco de entrada lo opera quien esté en recepción, no un
+#   administrador. Con 'ver' no podría registrar a nadie.
+FORZADOS = {
+    'asistencia': 'total',
+}
+
 
 def rol_a_clave(etiqueta: str) -> str:
     """'Coordinador' → 'coordinador'. Debe coincidir con el ENUM de usuarios.rol."""
@@ -113,6 +122,13 @@ def main() -> int:
             texto = str(ws.cell(row=r, column=col).value or '').strip()
             fila[clave] = NIVEL.get(texto, 'no')
         matriz[modulo] = fila
+
+    # Excepciones acordadas después del Excel
+    for modulo, nivel in FORZADOS.items():
+        if modulo not in RUTAS:
+            continue
+        matriz[modulo] = {clave: nivel for _, _, clave in roles}
+        print(f'  FORZADO · {modulo} = {nivel} para todos los roles')
 
     if sin_mapear:
         print(f'  AVISO · menús que no reconozco: {", ".join(sin_mapear)}')

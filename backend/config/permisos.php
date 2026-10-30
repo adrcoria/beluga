@@ -8,7 +8,7 @@ declare(strict_types=1);
  * Sale de la matriz que llenó el cliente:
  *     python scripts/generar_permisos.py docs/matriz_accesos_por_rol.xlsx
  *
- * Generado el 2026-10-13.
+ * Generado el 2026-10-28.
  *
  * Niveles:
  *   'total' → entra y modifica
@@ -27,7 +27,7 @@ return [
     'matriz' => [
         'dashboard' =>     ['administrador' => 'total', 'gerencia' => 'total', 'operativo' => 'total', 'instructor' => 'no'   , 'coordinador' => 'no'   ],
         'calendario' =>    ['administrador' => 'total', 'gerencia' => 'total', 'operativo' => 'total', 'instructor' => 'ver'  , 'coordinador' => 'ver'  ],
-        'asistencia' =>    ['administrador' => 'total', 'gerencia' => 'ver'  , 'operativo' => 'ver'  , 'instructor' => 'no'   , 'coordinador' => 'ver'  ],
+        'asistencia' =>    ['administrador' => 'total', 'gerencia' => 'total', 'operativo' => 'total', 'instructor' => 'total', 'coordinador' => 'total'],
         'reposiciones' =>  ['administrador' => 'total', 'gerencia' => 'total', 'operativo' => 'total', 'instructor' => 'no'   , 'coordinador' => 'ver'  ],
         'alumnos' =>       ['administrador' => 'total', 'gerencia' => 'total', 'operativo' => 'total', 'instructor' => 'ver'  , 'coordinador' => 'ver'  ],
         'instructores' =>  ['administrador' => 'total', 'gerencia' => 'ver'  , 'operativo' => 'ver'  , 'instructor' => 'ver'  , 'coordinador' => 'total'],

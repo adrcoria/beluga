@@ -74,6 +74,7 @@ use Beluga\Application\Actions\Reposiciones\DesagendarReposicionAction;
 use Beluga\Application\Actions\Reposiciones\CancelarReposicionAction;
 use Beluga\Application\Actions\Asistencia\RegistrarAsistenciaAction;
 use Beluga\Application\Actions\Asistencia\ListarAsistenciasAction;
+use Beluga\Application\Actions\Asistencia\MarcarAsistenciaAction;
 use Beluga\Application\Actions\Reportes\IngresosAction;
 use Beluga\Application\Actions\Reportes\CarteraAction;
 use Beluga\Application\Actions\Reportes\AsistenciaReporteAction;
@@ -232,6 +233,8 @@ return function (App $app): void {
         $group->group('/asistencias', function (RouteCollectorProxy $g) {
             $g->get('',  ListarAsistenciasAction::class);   // ?sucursal=&fecha=
             $g->post('', RegistrarAsistenciaAction::class);
+            // Pasar lista a mano / corregir un 'no asistió' automático
+            $g->put('/marcar', MarcarAsistenciaAction::class);
         });
 
         // Ausencias: avisar que un alumno no viene a una clase

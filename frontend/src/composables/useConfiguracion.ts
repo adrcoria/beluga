@@ -6,6 +6,12 @@ export interface Configuracion {
   horario_cupo_grupal?: string
   /** Horas de anticipación mínimas para que una falta dé derecho a reposición. */
   ausencia_horas_aviso?: string
+  /** Minutos antes de su clase en que el alumno ya puede registrarse. */
+  asistencia_min_antes?: string
+  /** Minutos después de que empieza la clase en que todavía cuenta. */
+  asistencia_retardo_max?: string
+  /** Desde cuándo se lleva control; los días anteriores no se cierran. */
+  asistencia_desde?: string
   [key: string]: string | undefined
 }
 
